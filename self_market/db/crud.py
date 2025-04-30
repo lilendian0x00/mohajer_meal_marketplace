@@ -44,7 +44,34 @@ async def get_or_create_user(db: AsyncSession, telegram_user: TelegramUser) -> m
         await db.refresh(new_user)
         return new_user
 
-# --- Placeholder functions ---
+
+async def update_user_verification(
+    db: AsyncSession,
+    telegram_id: int,
+    edu_num: str,
+    id_num: str,
+    phone_num: str
+) -> models.User | None:
+    """Updates user details from verification and sets is_verified to True."""
+    db_user = await get_user_by_telegram_id(db, telegram_id)
+    if not db_user:
+        # This shouldn't happen if called after get_or_create_user
+        return None
+
+    db_user.education_number = edu_num
+    db_user.identity_number = id_num
+    db_user.phone_number = phone_num
+    db_user.is_verified = True
+
+    try:
+        await db.commit()
+        await db.refresh(db_user)
+        return db_user
+    except Exception as e:
+        await db.rollback() # Rollback on error
+        # Consider logging the error here
+        # logger.error(f"Failed to update verification for user {telegram_id}: {e}")
+        raise # Re-raise the exception to be handled by the caller
 
 async def create_listing(db: AsyncSession, seller_id: int, reservation_id: int, price: float) -> models.Listing:
     """Creates a new listing."""
@@ -71,4 +98,3 @@ async def get_available_listings(db: AsyncSession) -> list[models.Listing]:
     )
     return result.scalars().all()
 
-# ... rest of crud functions ...

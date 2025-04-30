@@ -1,9 +1,8 @@
-# bot.py
 import logging
 import asyncio
 from telegram import Update
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
+    Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
 )
 import handlers # Bot Handlers
 
@@ -33,9 +32,28 @@ class TelegramBot:
             logger.debug("Registering handlers...")
 
             # Command Handlers
-            self.application.add_handler(CommandHandler("start", handlers.start))
+            verification_conv_handler = ConversationHandler(
+                entry_points=[CommandHandler("start", handlers.start)],  # Start command triggers it
+                states={
+                    handlers.ASK_EDU_NUM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.receive_education_number)],
+                    handlers.ASK_ID_NUM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.receive_identity_number)],
+                    handlers.ASK_PHONE: [MessageHandler(filters.CONTACT, handlers.receive_phone_number)],
+                    # Add fallbacks for unexpected messages in states if needed:
+                    # ASK_EDU_NUM: [..., MessageHandler(filters.ALL & ~filters.COMMAND, handlers.unexpected_message_handler)],
+                    # ASK_ID_NUM: [..., MessageHandler(filters.ALL & ~filters.COMMAND, handlers.unexpected_message_handler)],
+                    # ASK_PHONE: [..., MessageHandler(filters.ALL & ~filters.COMMAND & ~filters.CONTACT, handlers.unexpected_message_handler)],
+                },
+                fallbacks=[CommandHandler("cancel", handlers.cancel_verification)],
+                # Optional: Add conversation timeout, persistence, etc.
+                conversation_timeout=600 # 10 minutes timeout
+            )
+
+            # Add ConversationHandler FIRST (or with appropriate group number)
+            self.application.add_handler(verification_conv_handler)
+
+            # --- Other Command Handlers ---
+            # Note: /start is now an entry point for the conversation, don't add it again here.
             self.application.add_handler(CommandHandler("help", handlers.help_command))
-            # Add other command handlers...
 
             # Reply Keyboard Button Handlers (as MessageHandlers)
             self.application.add_handler(MessageHandler(

@@ -1,4 +1,3 @@
-# self_market/models.py
 import enum
 import logging
 from datetime import datetime, timezone
