@@ -91,6 +91,8 @@ class Meal(Base):
     meal_type = Column(String(20), nullable=False) # e.g., 'lunch', 'dinner'
     description = Column(String(255), nullable=True)
     price = Column(Float, nullable=True) # Original price from university
+    price_limit = Column(Numeric(10, 2), nullable=True) # Max price it can be listed for
+
 
     # Relationships
     reservations = relationship(

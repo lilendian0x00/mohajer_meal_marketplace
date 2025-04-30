@@ -90,7 +90,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | Non
 
         # Ask first question
         await message.reply_text(
-            "۱. لطفا شماره دانشجویی خود را وارد کنید:", # 1. Please enter your educational number:
+            "1. لطفا شماره دانشجویی خود را وارد کنید:", # 1. Please enter your educational number:
             reply_markup=ReplyKeyboardRemove() # Remove previous keyboard if any
             )
         return ASK_EDU_NUM # Return the next state
@@ -127,7 +127,7 @@ async def receive_education_number(update: Update, context: ContextTypes.DEFAULT
 
     context.user_data['edu_num'] = edu_num # Store in context temporarily
 
-    await message.reply_text("۲. لطفا شماره ملی خود را وارد کنید:") # 2. Please enter your identity number:
+    await message.reply_text("2. لطفا شماره ملی خود را وارد کنید:") # 2. Please enter your identity number:
     return ASK_ID_NUM # Move to next state
 
 async def receive_identity_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -152,7 +152,7 @@ async def receive_identity_number(update: Update, context: ContextTypes.DEFAULT_
     reply_markup = ReplyKeyboardMarkup([[phone_button], [cancel_button]], resize_keyboard=True, one_time_keyboard=True) # One time use for contact
 
     await message.reply_text(
-        "۳. برای تایید نهایی، لطفا شماره تلفن خود را با استفاده از دکمه زیر به اشتراک بگذارید.", # 3. For final confirmation, please share your phone number using the button below.
+        "3. برای تایید نهایی، لطفا شماره تلفن خود را با استفاده از دکمه زیر به اشتراک بگذارید.", # 3. For final confirmation, please share your phone number using the button below.
         reply_markup=reply_markup
         )
     return ASK_PHONE # Move to next state
@@ -168,7 +168,7 @@ async def receive_phone_number(update: Update, context: ContextTypes.DEFAULT_TYP
         await message.reply_text("لطفا از دکمه 'ارسال شماره تلفن من' استفاده کنید یا /cancel را بزنید.")
         return ASK_PHONE # Stay in current state
 
-    # --- Security Check: Ensure the contact shared belongs to the user sending it ---
+    # Security Check: Ensure the contact shared belongs to the user sending it
     if contact.user_id != user.id:
         logger.warning(f"User {user.id} shared contact belonging to user {contact.user_id}.")
         await message.reply_text("خطا: شماره تلفن ارسال شده متعلق به شما نیست. لطفا دوباره تلاش کنید یا /cancel بزنید.")
@@ -265,11 +265,15 @@ async def handle_buy_food(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     logger.info(f"'Buy Food' button pressed by user {user_id}")
     await update.message.reply_text("لیست غذاهای موجود برای خرید به زودی نمایش داده می‌شود...")
 
+
+
 async def handle_sell_food(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the 'Sell Food' button press."""
     user_id = update.effective_user.id
     logger.info(f"'Sell Food' button pressed by user {user_id}")
+
     await update.message.reply_text("برای فروش غذا، لطفا کد رزرو دانشگاه خود را وارد کنید:")
+
 
 async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the 'Settings' button press."""
