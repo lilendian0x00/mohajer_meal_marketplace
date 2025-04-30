@@ -187,7 +187,7 @@ async def receive_phone_number(update: Update, context: ContextTypes.DEFAULT_TYP
     phone_num = phone_num.lstrip('+')
     logger.info(f"User {user.id} shared phone number: ...{phone_num[-4:]}") # Log partial
 
-    # --- Retrieve data stored in context ---
+    # Retrieve data stored in context
     edu_num = context.user_data.get('edu_num')
     id_num = context.user_data.get('id_num')
 
@@ -200,7 +200,7 @@ async def receive_phone_number(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data.clear() # Clear potentially corrupt data
         return ConversationHandler.END
 
-    # --- Update Database ---
+    # Update Database
     try:
         async with get_db_session() as db_session:
             updated_user = await crud.update_user_verification(
@@ -278,7 +278,7 @@ async def handle_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text("بخش تنظیمات به زودی فعال خواهد شد.")
 
 
-# --- Generic echo handler (remains the same) ---
+# Generic echo handler
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message and update.message.text:
         logger.info(f"Received unhandled text message from {update.effective_user.username}: {update.message.text}")
