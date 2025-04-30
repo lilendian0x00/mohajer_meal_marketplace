@@ -1,9 +1,7 @@
 import logging
 import asyncio
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 import config
-import handlers
+from bot import TelegramBot
 from self_market.db.session import init_db
 
 # Logging Setup
@@ -14,63 +12,25 @@ try:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
     logger = logging.getLogger(__name__)
-    logger.debug("Logging setup complete.") # Optional: debug level log
+    logger.debug("Logging setup complete.")
 except Exception as e:
-    # Fallback logging if setup fails
-    logging.basicConfig(level=logging.ERROR) # Basic config
+    logging.basicConfig(level=logging.ERROR)
     logger = logging.getLogger(__name__)
     logger.error(f"Logging setup failed: {e}", exc_info=True)
 
 
-# --- Main Async Function ---
 async def main() -> None:
-    """Initializes DB, sets up and runs the bot application."""
+    """Initializes DB, creates Bot instance and runs it."""
 
-    # --- Token Check ---
+    # Token Check
     if not config.TELEGRAM_BOT_TOKEN or config.TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        logger.error("FATAL: Telegram Bot Token missing.")
+        logger.error("FATAL: Telegram Bot Token missing in config.")
         return
     logger.debug("Token checked.")
 
     logger.info(f"Using Database: {config.DATABASE_URL}")
 
-    # --- Application Setup ---
-    try:
-        logger.debug("Creating Application builder...")
-        builder = Application.builder().token(config.TELEGRAM_BOT_TOKEN)
-        logger.debug("Building Application...")
-        application = builder.build()
-        logger.debug("Application built.")
-    except Exception as e:
-        logger.error(f"Application build failed: {e}", exc_info=True)
-        return # Cannot continue without application object
-
-    # --- Handler Registration ---
-    try:
-        logger.debug("Registering handlers...")
-        application.add_handler(CommandHandler("start", handlers.start))
-        application.add_handler(CommandHandler("help", handlers.help_command))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.echo))
-
-        # --- Register Handlers for Reply Keyboard Buttons ---
-        application.add_handler(MessageHandler(
-            filters.Text(["🛒 خرید غذا"]),
-            handlers.handle_buy_food
-        ))
-        application.add_handler(MessageHandler(
-            filters.Text(["🏷️ فروش غذا"]),
-            handlers.handle_sell_food
-        ))
-        application.add_handler(MessageHandler(
-            filters.Text(["⚙️ تنظیمات"]),
-            handlers.handle_settings
-        ))
-        logger.debug("Handlers registered.")
-    except Exception as e:
-        logger.error(f"Handler registration failed: {e}", exc_info=True)
-        return
-
-    # DB initialization
+    # Initialize DB
     try:
         logger.info("Initializing database schema...")
         await init_db()
@@ -78,36 +38,25 @@ async def main() -> None:
         logger.error("Database initialization failed. Bot will not start.")
         return # Exit if DB init fails
 
-    # Start the bot
-    logger.info("Starting bot...")
+    # Create and Run Bot Instance
     try:
-        async with application:
-            logger.debug("Initializing application...")
-            await application.initialize()
-            logger.debug("Starting application update handling...")
-            await application.start()
-            logger.debug("Starting polling...")
-            await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        logger.info("Creating TelegramBot instance...")
+        bot_instance = TelegramBot(token=config.TELEGRAM_BOT_TOKEN)
+        logger.info("Running bot instance...")
+        await bot_instance.run() # Call the async run method
 
-            logger.info("Bot is running. Press Ctrl+C to stop.")
-
-            # Keep the application running
-            stop_event = asyncio.Event()
-            await stop_event.wait()
-
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Shutdown signal received.")
+    except ValueError as e: # Catch potential token error from Bot __init__
+         logger.error(f"Failed to create bot instance: {e}")
+    except RuntimeError as e: # Catch potential handler registration error
+        logger.error(f"Failed during bot setup: {e}")
     except Exception as e:
-        logger.error(f"An error occurred during bot execution: {e}", exc_info=True)
-    finally:
-        # Cleanup is handled by 'async with application:' context manager
-        logger.info("Bot shutdown process initiating or completed.")
+        logger.error(f"An unexpected error occurred running the bot: {e}", exc_info=True)
 
 
-# Entry point
+# Entry Point
 if __name__ == "__main__":
+    logger.info("Starting application...")
     try:
-        logger.debug("Calling asyncio.run(main())")
         asyncio.run(main())
     except RuntimeError as e:
         # Suppress common "Event loop is closed" error on Windows during final cleanup
@@ -117,7 +66,6 @@ if __name__ == "__main__":
         else:
              logger.exception("Application level RuntimeError:", exc_info=e)
     except KeyboardInterrupt:
-        # Already handled within main() or by asyncio.run() exiting
         logger.debug("Application level KeyboardInterrupt caught.")
         pass
     finally:

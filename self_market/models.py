@@ -39,14 +39,21 @@ class User(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     telegram_id = Column(Integer, unique=True, nullable=False, index=True)
     username = Column(String(64), nullable=True, index=True)
+
     first_name = Column(String(64), nullable=True)
     last_name = Column(String(64), nullable=True)
+
     education_number = Column(String(64), nullable=True)
+    identity_number = Column(String(64), nullable=True)
     phone_number = Column(String(64), nullable=True)
-    credit_card_info = Column(String(64), nullable=True) # SECURITY WARNING REMAINS
+    credit_card_number = Column(String(64), nullable=True)
+
     is_active = Column(Boolean, default=True, nullable=False)
+    is_verified = Column(Boolean, default=False, nullable=False)
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
 
     # Relationships
     reservations = relationship(

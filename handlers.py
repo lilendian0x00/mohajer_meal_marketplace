@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
 
@@ -18,6 +19,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     logger.info(f"/start command received from user_id: {telegram_user.id}")
 
+    db_user = None
+
     # --- Database Interaction  ---
     try:
         async with get_db_session() as db_session:
@@ -29,6 +32,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "ببخشید، مشکلی در پردازش پروفایل شما پیش آمد. لطفا دوباره امتحان کنید."
         )
         return
+
+    # Create Personalized Welcome Message
+    user_display_name = telegram_user.first_name or telegram_user.username or f"کاربر {telegram_user.id}"
+    welcome_message = (
+        f"سلام {user_display_name} عزیز! 👋\n"
+        "به ربات خرید و فروش غذای مهاجر خوش آمدید.\n\n"
+        "از دکمه‌های زیر برای ادامه استفاده کنید:"  # Use the buttons below to continue:
+    )
+
+    # Check if the user has verified
+    if not db_user.is_verified:
+        keyboard = [
+            [KeyboardButton("✅ اعتبارسنجی")],
+        ]
+
+        reply_markup = ReplyKeyboardMarkup(
+            keyboard,
+            resize_keyboard=True,  # Recommended: Adjusts button height
+            one_time_keyboard=False,  # Keyboard stays visible until removed/replaced
+            input_field_placeholder="گزینه مورد نظر را انتخاب کنید..."  # Optional: Placeholder text
+            # persistent=True # Default is False, True keeps it across restarts for the user
+        )
+
+        if update.message:
+            await update.message.reply_text(welcome_message, reply_markup=reply_markup)
+
+        return
+
 
     # --- Create Reply Keyboard Buttons ---
     # Using the exact text the user will send when clicking
@@ -47,15 +78,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # persistent=True # Default is False, True keeps it across restarts for the user
     )
 
-    # --- Create Personalized Welcome Message ---
-    user_display_name = telegram_user.first_name or telegram_user.username or f"کاربر {telegram_user.id}"
-    welcome_message = (
-        f"سلام {user_display_name} عزیز! 👋\n"
-        "به ربات خرید و فروش غذای مهاجر خوش آمدید.\n\n"
-        "از دکمه‌های زیر برای ادامه استفاده کنید:" # Use the buttons below to continue:
-    )
-
-    # --- Send Message with Reply Keyboard ---
+    # Send Message with Reply Keyboard
     if update.message:
         await update.message.reply_text(welcome_message, reply_markup=reply_markup)
     # Note: Sending/updating ReplyKeyboard via callback_query is not standard practice.
