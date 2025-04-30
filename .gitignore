@@ -1,1 +1,4 @@
 .idea
+.venv
+__pycache__/
+self_market.db
