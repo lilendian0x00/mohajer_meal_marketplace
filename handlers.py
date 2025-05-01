@@ -1,7 +1,9 @@
 # handlers.py
 import logging
 import re # For basic validation
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, Contact
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, Contact, InlineKeyboardButton, \
+    InlineKeyboardMarkup
+from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters, CommandHandler # Import conversation components
 
 import utility
@@ -256,15 +258,114 @@ async def unexpected_message_handler(update: Update, context: ContextTypes.DEFAU
     # Or you can retrieve current state from context if needed to return it explicitly
 
 
-# --- Handlers for main menu buttons (remain the same) ---
-
+# Handlers for main menu buttons
 async def handle_buy_food(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles the 'Buy Food' button press."""
-    user_id = update.effective_user.id
-    # Optional: Check verification again, though they shouldn't see button if not verified
-    logger.info(f"'Buy Food' button pressed by user {user_id}")
-    await update.message.reply_text("لیست غذاهای موجود برای خرید به زودی نمایش داده می‌شود...")
+    """Handles the 'Buy Food' button press: Fetches and displays available listings."""
+    user = update.effective_user
+    message = update.message
+    if not user or not message:
+        return  # Should not happen with message handler
 
+    logger.info(f"'Buy Food' button pressed by user {user.id}")
+
+    # Check Verification Status
+    try:
+        async with get_db_session() as db_session:
+            db_user = await crud.get_user_by_telegram_id(db_session, user.id)
+            if not db_user:
+                 logger.error(f"User {user.id} not found in DB during buy food.")
+                 await message.reply_text("خطا: اطلاعات کاربری شما یافت نشد. لطفا /start بزنید.")
+                 return
+            if not db_user.is_verified:
+                logger.warning(f"Unverified user {user.id} attempted action: buy food")
+                await message.reply_text("برای خرید غذا، ابتدا باید فرآیند اعتبارسنجی را با دستور /start کامل کنید.")
+                return
+    except Exception as e:
+        logger.error(f"DB error checking user verification for {user.id} in handle_buy_food: {e}", exc_info=True)
+        await message.reply_text("خطا در بررسی وضعیت اعتبارسنجی. لطفا دوباره تلاش کنید.")
+        return
+
+    # Fetch Available Listings
+    try:
+        async with get_db_session() as db_session:
+            # Use the CRUD function that eager loads related data
+            available_listings = await crud.get_available_listings(db_session)
+
+        if not available_listings:
+            await message.reply_text("در حال حاضر هیچ غذایی برای فروش ثبت نشده است.") # No food listed for sale currently.
+            return
+
+        # Format and Send Listings
+        response_parts = ["🛒 **لیست غذاهای موجود برای خرید:**\n"] # Use MarkdownV2 requires escaping special chars
+
+        purchase_buttons = [] # To hold inline buttons for purchasing
+
+        for listing in available_listings:
+            # Safely access related data (handle potential None values)
+            meal_desc = "غذای نامشخص" # Unknown meal
+            meal_date_str = "نامشخص" # Unknown
+            meal_type = "نامشخص" # Unknown
+            if listing.reservation and listing.reservation.meal:
+                meal = listing.reservation.meal
+                meal_desc = meal.description or meal_desc
+                meal_type = meal.meal_type or meal_type
+                if meal.date:
+                    try:
+                        meal_date_str = meal.date.strftime('%Y-%m-%d') # Format date
+                    except AttributeError: # Handle if date isn't a date object somehow
+                        meal_date_str = str(meal.date)
+
+            seller_name = "ناشناس" # Anonymous
+            if listing.seller:
+                 # Prefer first name, fallback to username
+                 seller_name = listing.seller.first_name or listing.seller.username or seller_name
+
+            # Format price using f-string, handling potential None
+            price_str = f"{listing.price:,.0f}" if listing.price is not None else "نامشخص"
+
+            # Use Markdown (V1) - less escaping needed than V2
+            part = (
+                f"🍽️ *{meal_desc}* ({meal_type} - {meal_date_str})\n"
+                f"👤 فروشنده: {seller_name}\n"
+                f"💰 قیمت: {price_str} تومان\n"
+                f"🆔 شماره آگهی: `{listing.id}`\n" # Use backticks for easy copy-paste
+                f"--------------------\n"
+            )
+            response_parts.append(part)
+
+            # Prepare Inline Button for Purchase
+            purchase_buttons.append([
+                InlineKeyboardButton(
+                    f"خرید آگهی {listing.id} ({price_str} تومان)",
+                    callback_data=f'buy_listing_{listing.id}'
+                )
+            ])
+
+        # Combine and Send
+        full_message = "".join(response_parts)
+        # Create the inline keyboard markup
+        reply_markup = InlineKeyboardMarkup(purchase_buttons)
+
+        # Handle potential message length limits (Telegram limit is 4096 chars)
+        if len(full_message) > 4096:
+            # Basic truncation (better: pagination)
+            full_message = full_message[:4090] + "\n..."
+            logger.warning(f"Listing message for user {user.id} was truncated.")
+            # Consider not sending buttons if truncated, or using pagination logic
+            await message.reply_text(full_message, parse_mode=ParseMode.MARKDOWN)
+            await message.reply_text("لیست کامل طولانی است و خلاصه شد. برای دیدن همه موارد از فیلترها استفاده کنید (به زودی).") # List is too long and was summarized...
+        else:
+             await message.reply_text(
+                 full_message,
+                 parse_mode=ParseMode.MARKDOWN, # Specify parse mode
+                 reply_markup=reply_markup      # Add the inline buttons
+            )
+
+    except Exception as e:
+        logger.error(f"Failed to get or format available listings for user {user.id}: {e}", exc_info=True)
+        await message.reply_text(
+            "خطا در دریافت لیست غذاها. لطفا دوباره تلاش کنید."
+        )
 
 
 async def handle_sell_food(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
