@@ -1,6 +1,10 @@
 import logging
 import asyncio
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import atexit
 import config
+from background_tasks import check_pending_listings_timeout
+from config import BACKGROUND_CHECK_INTERVAL_MINUTES, PENDING_TIMEOUT_MINUTES
 from bot import TelegramBot
 from self_market.db.session import init_db
 
@@ -42,6 +46,29 @@ async def main() -> None:
     try:
         logger.info("Creating TelegramBot instance...")
         bot_instance = TelegramBot(token=config.TELEGRAM_BOT_TOKEN)
+        ptb_app = bot_instance.application
+
+        # --- Scheduler Setup ---
+        scheduler = AsyncIOScheduler(timezone="UTC")  # Use UTC or your preferred timezone
+
+        # Add the job, passing the Application object via kwargs
+        scheduler.add_job(
+            check_pending_listings_timeout,
+            trigger='interval',
+            minutes=BACKGROUND_CHECK_INTERVAL_MINUTES,  # Use the constant
+            id='check_timeouts_job',  # Assign an ID
+            replace_existing=True,
+            kwargs={'app': ptb_app}
+        )
+        logger.info(
+            f"Scheduled background task 'check_pending_listings_timeout' to run every {PENDING_TIMEOUT_MINUTES} minutes.")
+
+        # Register scheduler shutdown hook
+        atexit.register(lambda: scheduler.shutdown())
+
+        scheduler.start()
+        logger.info("APScheduler started.")
+
         logger.info("Running bot instance...")
         await bot_instance.run() # Call the async run method
 

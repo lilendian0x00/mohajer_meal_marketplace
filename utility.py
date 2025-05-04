@@ -40,3 +40,32 @@ def is_valid_iranian_national_id(national_id: str) -> bool:
         # This should technically not be reached if the regex matched,
         # but it's good practice for robustness.
         return False
+
+def mask_card_number(card_number: str | None) -> str:
+    """Masks a card number, showing only the last 4 digits."""
+    if not card_number:
+        return " ثبت نشده" # "Not Set"
+
+    # Remove potential spaces and non-digits for safety before masking
+    digits_only = ''.join(filter(str.isdigit, card_number))
+
+    if len(digits_only) < 4:
+        # Handle cases where stored number is too short or invalid
+        return " (فرمت نامعتبر)" # "(Invalid Format)"
+
+    # Simple masking
+    masked_part = "**** **** **** "
+    last_four = digits_only[-4:]
+    return f" `{masked_part}{last_four}`" # Return masked number within backticks for markdown
+
+
+def escape_markdown_v2(text: str | None) -> str:
+    """Escapes characters for Telegram MarkdownV2 parsing."""
+    if text is None:
+        return ""
+    # Characters to escape: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    # Note: Escaping ` within code blocks is not needed if using single backticks.
+    # We escape backticks outside code blocks if they might appear.
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    # Use re.sub to add a backslash before special characters
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)

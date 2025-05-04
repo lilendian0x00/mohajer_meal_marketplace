@@ -1,19 +1,25 @@
-# self_market/db/crud.py
+import logging
+from datetime import datetime, timezone, date, timedelta
+from decimal import Decimal
+
+from sqlalchemy import or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, joinedload
 from telegram import User as TelegramUser
-
-
+from config import PENDING_TIMEOUT_MINUTES
 from .. import models # Import the models.py file from the parent directory (self_market)
 
+# Get logger instance
+logger = logging.getLogger(__name__)
 
-async def get_user_by_telegram_id(db: AsyncSession, telegram_id: int) -> models.User | None:
+
+async def get_user_by_telegram_id(db: AsyncSession, telegram_id: int, load_listings: bool = False) -> models.User | None:
     """Fetches a user by their Telegram ID."""
     # Access models like models.User, models.Listing, etc.
-    result = await db.execute(
-        select(models.User).filter(models.User.telegram_id == telegram_id)
-    )
+    stmt = select(models.User).filter(models.User.telegram_id == telegram_id)
+    if load_listings: stmt = stmt.options(selectinload(models.User.listings), selectinload(models.User.purchases))
+    result = await db.execute(stmt);
     return result.scalar_one_or_none()
 
 async def get_or_create_user(db: AsyncSession, telegram_user: TelegramUser) -> models.User:
@@ -73,28 +79,433 @@ async def update_user_verification(
         # logger.error(f"Failed to update verification for user {telegram_id}: {e}")
         raise # Re-raise the exception to be handled by the caller
 
-async def create_listing(db: AsyncSession, seller_id: int, reservation_id: int, price: float) -> models.Listing:
-    """Creates a new listing."""
-    new_listing = models.Listing( # Uses models.Listing
-        seller_id=seller_id,
-        reservation_id=reservation_id,
-        price=price,
-        status=models.ListingStatus.AVAILABLE # Uses models.ListingStatus
+
+# async def get_reservation_by_code(db: AsyncSession, code: str) -> models.MealReservation | None:
+#     """Fetches a MealReservation by its unique university_reservation_code."""
+#     logger.debug(f"Fetching reservation by code: {code}")
+#     stmt = select(models.MealReservation).where(
+#         models.MealReservation.university_reservation_code == code
+#     ).options(
+#         # Load data needed for checks and confirmation messages
+#         joinedload(models.MealReservation.user),    # Need user to check ownership
+#         joinedload(models.MealReservation.meal),    # Need meal for price_limit & description
+#         selectinload(models.MealReservation.listing) # Need listing to check if already listed
+#     )
+#     result = await db.execute(stmt)
+#     return result.scalar_one_or_none()
+
+# Get meals for selection
+async def get_meals_for_selling(db: AsyncSession, specific_date: date | None = None) -> list[models.Meal]:
+    """Fetches meals (e.g., for today/future) that can be listed."""
+    stmt = select(models.Meal)
+    # Example filter: Get meals from today onwards
+    # from_date = specific_date or date.today()
+    # stmt = stmt.where(models.Meal.date >= from_date)
+    stmt = stmt.order_by(models.Meal.date, models.Meal.meal_type)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+async def check_listing_exists_by_code(db: AsyncSession, code: str) -> bool:
+    """Checks if a listing with the given university_reservation_code already exists."""
+    stmt = select(models.Listing.id).where(models.Listing.university_reservation_code == code).limit(1)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() is not None
+
+async def create_listing(
+    db: AsyncSession,
+    seller_db_id: int, # Use the DB User ID
+    university_reservation_code: str,
+    meal_id: int,  # Foreign key to the selected Meal
+    price: Decimal  # Consider using Decimal or Numeric if passed from handler
+) -> models.Listing | None:
+    """Creates a new listing, ensuring the code is unique."""
+    # Check uniqueness of the code first
+    code_exists = await check_listing_exists_by_code(db, university_reservation_code)
+    if code_exists:
+        logger.warning(f"Attempted to create duplicate listing for code {university_reservation_code}")
+        return None # Indicate failure: duplicate code
+
+    logger.info(f"Creating new listing for code {university_reservation_code} by seller {seller_db_id} for meal {meal_id} at price {price}")
+
+    # Check if the referenced meal_id exists (optional but good practice)
+    meal_check = await db.get(models.Meal, meal_id)
+    if not meal_check:
+        logger.error(f"Meal with id {meal_id} not found when creating listing for code {university_reservation_code}.")
+        return None # Indicate failure: invalid meal_id
+
+    new_listing = models.Listing(
+        seller_id=seller_db_id,
+        university_reservation_code=university_reservation_code,
+        meal_id=meal_id,
+        price=price,  # Store as Numeric/Decimal
+        status=models.ListingStatus.AVAILABLE
     )
     db.add(new_listing)
-    await db.commit()
-    await db.refresh(new_listing)
-    return new_listing
+    try:
+        await db.commit()
+        await db.refresh(new_listing)
+        logger.info(f"Successfully created listing {new_listing.id}")
+        return new_listing
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"DB error creating listing for code {university_reservation_code}: {e}", exc_info=True)
+        return None
+
 
 async def get_available_listings(db: AsyncSession) -> list[models.Listing]:
     """Fetches all available listings."""
     result = await db.execute(
-        select(models.Listing) # Uses models.Listing
-        .where(models.Listing.status == models.ListingStatus.AVAILABLE) # Uses models.ListingStatus
-        .options(selectinload(models.Listing.seller))
-        # Need to adjust this if MealReservation is also in models.py
-        .options(selectinload(models.Listing.reservation).selectinload(models.MealReservation.meal))
-        .order_by(models.Listing.created_at.desc())
+        select(models.Listing)
+        .where(models.Listing.status == models.ListingStatus.AVAILABLE)
+        .options(
+            joinedload(models.Listing.seller),  # Eager load seller
+            joinedload(models.Listing.meal)  # Eager load meal directly
+        )
+        .order_by(models.Listing.created_at.desc())  # Example order
     )
     return result.scalars().all()
+
+async def get_listing_by_id(db: AsyncSession, listing_id: int) -> models.Listing | None:
+    """Fetches a specific listing by its ID, loading related meal and seller."""
+    result = await db.execute(
+        select(models.Listing)
+        .where(models.Listing.id == listing_id)
+        .options(
+            joinedload(models.Listing.seller), # Need seller for card number & notification
+            joinedload(models.Listing.meal)    # Need meal details
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def set_listing_awaiting_confirmation(
+    db: AsyncSession, listing_id: int, buyer_telegram_id: int
+) -> models.Listing | None:
+    """Updates listing status to AWAITING_CONFIRMATION and sets pending_buyer_id."""
+    logger.info(f"Setting listing {listing_id} to awaiting confirmation for buyer {buyer_telegram_id}")
+    listing = await get_listing_by_id(db, listing_id) # Gets listing with seller+meal loaded
+    if not listing:
+        logger.warning(f"Listing {listing_id} not found.")
+        return None
+
+    if listing.status != models.ListingStatus.AVAILABLE:
+        logger.warning(f"Listing {listing_id} is not available (status: {listing.status}). Cannot set to awaiting confirmation.")
+        return None # Already processed or not available
+
+    buyer_user = await get_user_by_telegram_id(db, buyer_telegram_id)
+    if not buyer_user:
+        logger.error(f"Buyer user {buyer_telegram_id} not found.")
+        return None # Should not happen if buyer used /start
+
+    if listing.seller_id == buyer_user.id:
+         logger.warning(f"User {buyer_telegram_id} attempted to initiate purchase on own listing {listing_id}.")
+         return None # Or handle as specific error case
+
+    listing.status = models.ListingStatus.AWAITING_CONFIRMATION
+    listing.pending_buyer_id = buyer_user.id # Store the intended buyer's *DB ID*
+    listing.buyer_id = None # Ensure final buyer_id is null at this stage
+    timeout_duration = timedelta(minutes=PENDING_TIMEOUT_MINUTES)
+    listing.pending_until = datetime.now(timezone.utc) + timeout_duration
+    listing.sold_at = None  # Ensure sold_at is None
+
+    try:
+        db.add(listing) # Ensure tracked by session
+        await db.commit()
+        await db.refresh(listing)
+        # Ensure relationships needed by handler are refreshed
+        await db.refresh(listing, attribute_names=['seller', 'meal'])
+        logger.info(f"Listing {listing_id} status updated to AWAITING_CONFIRMATION.")
+        return listing
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"DB error setting listing {listing_id} to awaiting: {e}", exc_info=True)
+        return None
+
+
+async def finalize_listing_sale(
+    db: AsyncSession, listing_id: int, confirming_seller_telegram_id: int
+) -> tuple[models.Listing | None, str | None]: # Use tuple for clearer return type hint
+    """
+    Finalizes the sale after seller confirmation.
+    Checks status, seller identity, sets buyer_id, status=SOLD, sold_at.
+    Returns (updated_listing, reservation_code) or (None, None).
+    """
+    logger.info(f"Seller {confirming_seller_telegram_id} confirming payment for listing {listing_id}")
+
+    # Fetch the listing, ensuring seller and meal details are loaded upfront
+    listing = await db.execute(
+        select(models.Listing)
+        .where(models.Listing.id == listing_id)
+        .options(
+            joinedload(models.Listing.seller), # Load seller for checks
+            joinedload(models.Listing.meal)     # Load meal for potential notifications later
+        )
+    )
+
+    listing = listing.scalar_one_or_none()
+
+    # --- Perform Checks ---
+    if not listing:
+        logger.warning(f"Listing {listing_id} not found.")
+        return None, None
+    # Use seller loaded via joinedload
+    if not listing.seller or listing.seller.telegram_id != confirming_seller_telegram_id:
+        # Added more specific log message
+        logger.error(f"User {confirming_seller_telegram_id} is not the seller of listing {listing_id} or seller info failed to load.")
+        return None, None
+    if listing.status != models.ListingStatus.AWAITING_CONFIRMATION:
+        # Added status value to log message
+        logger.warning(f"Listing {listing_id} is not awaiting confirmation (Status: {listing.status}). Cannot finalize.")
+        return None, None
+    if not listing.pending_buyer_id: # This check is important
+        logger.error(f"Listing {listing_id} is awaiting confirmation but has no pending_buyer_id!")
+        # This indicates a potential issue in the previous step (handle_confirm_purchase)
+        return None, None
+
+    # --- Fetch the Pending Buyer User Separately ---
+    # This is the correct way to get the user based on the pending_buyer_id
+    pending_buyer_user = await db.get(models.User, listing.pending_buyer_id)
+    if not pending_buyer_user:
+        logger.error(f"Pending buyer user ID {listing.pending_buyer_id} not found in DB for listing {listing_id}.")
+        # Decide how to handle this - maybe revert listing status? For now, fail finalization.
+        return None, None # Cannot finalize without the buyer user object
+
+    # --- Prepare for Update ---
+    reservation_code = listing.university_reservation_code # Get code before potential state changes
+
+    # --- Finalize the Sale Attributes ---
+    listing.status = models.ListingStatus.SOLD
+    listing.buyer_id = listing.pending_buyer_id # Set final buyer FK from pending FK
+    listing.buyer = pending_buyer_user # Associate the fetched buyer object in memory
+    listing.pending_buyer_id = None # Clear pending buyer ID
+    listing.sold_at = datetime.now(timezone.utc)
+
+    # --- Commit and Refresh ---
+    try:
+        db.add(listing) # Ensure the modified listing object is tracked by the session
+        await db.commit()
+        # Refresh the listing object AND the relationships modified/needed by the caller.
+        # Refreshing 'buyer' ensures the relationship uses the now-committed buyer_id.
+        # Refreshing 'meal' ensures it's up-to-date if accessed after returning.
+        await db.refresh(listing, attribute_names=['buyer', 'meal'])
+        logger.info(f"Listing {listing_id} finalized as SOLD to buyer ID {listing.buyer_id}.")
+        return listing, reservation_code # Return the updated listing object and the code
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"DB error during commit/refresh finalizing sale for listing {listing_id}: {e}", exc_info=True)
+        return None, None
+
+
+async def update_user_credit_card(db: AsyncSession, telegram_id: int, new_card_number: str) -> bool:
+    """Updates only the credit_card_number for a given user."""
+    logger.info(f"Attempting to update credit card for telegram_id {telegram_id}")
+    try:
+        # Fetch the user first
+        stmt = select(models.User).filter(models.User.telegram_id == telegram_id)
+        result = await db.execute(stmt)
+        db_user = result.scalar_one_or_none()
+
+        if not db_user:
+            logger.warning(f"User with telegram_id {telegram_id} not found for card update.")
+            return False
+
+        # Update the card number
+        db_user.credit_card_number = new_card_number
+        # The updated_at field should update automatically due to onupdate
+
+        await db.commit()
+        logger.info(f"Successfully updated credit card for telegram_id {telegram_id}")
+        return True
+
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"DB error updating credit card for telegram_id {telegram_id}: {e}", exc_info=True)
+        return False # Indicate failure
+
+async def get_user_active_listings(db: AsyncSession, user_telegram_id: int) -> list[models.Listing]:
+    """
+    Fetches listings for a user that are either AVAILABLE or AWAITING_CONFIRMATION.
+    """
+    logger.debug(f"Fetching active listings for user {user_telegram_id}")
+    user = await get_user_by_telegram_id(db, user_telegram_id)
+    if not user:
+        logger.warning(f"User {user_telegram_id} not found when fetching active listings.")
+        return []
+
+    stmt = select(models.Listing).where(
+        models.Listing.seller_id == user.id,
+        or_( # Check for multiple statuses
+            models.Listing.status == models.ListingStatus.AVAILABLE,
+            models.Listing.status == models.ListingStatus.AWAITING_CONFIRMATION
+        )
+    ).options(
+        # Load meal details for display
+        joinedload(models.Listing.meal)
+        # joinedload(models.Listing.pending_buyer) # Optional: Load if displaying buyer info
+    ).order_by(
+        # Order by status first (e.g., awaiting first), then by date
+        models.Listing.status.desc(), # 'sold', 'awaiting...', 'available', 'cancelled'
+        models.Listing.created_at.desc() # Or by meal date: models.Listing.meal.date
+    )
+
+    result = await db.execute(stmt)
+    listings = result.scalars().all()
+    logger.debug(f"Found {len(listings)} active listings for user {user_telegram_id}")
+    return listings
+
+async def cancel_available_listing_by_seller(db: AsyncSession, listing_id: int, seller_telegram_id: int) -> bool:
+    """
+    Cancels an AVAILABLE listing if the user is the seller.
+    Returns True on success, False otherwise.
+    """
+    logger.info(f"User {seller_telegram_id} attempting to cancel available listing {listing_id}")
+    try:
+        # Fetch the listing and seller in one go
+        stmt = select(models.Listing).where(models.Listing.id == listing_id).options(joinedload(models.Listing.seller))
+        result = await db.execute(stmt)
+        listing = result.scalar_one_or_none()
+
+        if not listing:
+            logger.warning(f"Cancellation failed: Listing {listing_id} not found.")
+            return False
+
+        # Verify ownership
+        if not listing.seller or listing.seller.telegram_id != seller_telegram_id:
+            logger.warning(f"Cancellation failed: User {seller_telegram_id} is not the seller of listing {listing_id}.")
+            return False
+
+        # Verify status
+        if listing.status != models.ListingStatus.AVAILABLE:
+            logger.warning(f"Cancellation failed: Listing {listing_id} is not AVAILABLE (Status: {listing.status}).")
+            return False
+
+        # Perform cancellation
+        listing.status = models.ListingStatus.CANCELLED
+        listing.cancelled_at = datetime.now(timezone.utc)
+        # Keep other fields like pending_buyer_id (should be null anyway)
+
+        db.add(listing)
+        await db.commit()
+        logger.info(f"Successfully cancelled listing {listing_id} by seller {seller_telegram_id}.")
+        return True
+
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"DB error cancelling listing {listing_id}: {e}", exc_info=True)
+        return False
+
+
+async def get_user_purchase_history(db: AsyncSession, user_telegram_id: int, page: int = 0, page_size: int = 5) -> tuple[list[models.Listing], int]:
+    """Fetches paginated purchase history (SOLD listings) for a user."""
+    logger.debug(f"Fetching purchase history for user {user_telegram_id}, page {page}")
+    user = await get_user_by_telegram_id(db, user_telegram_id)
+    if not user:
+        return [], 0
+
+    offset = page * page_size
+
+    # Query for total count
+    count_stmt = select(func.count(models.Listing.id)).where(
+        models.Listing.buyer_id == user.id,
+        models.Listing.status == models.ListingStatus.SOLD # Only show successful purchases
+    ).select_from(models.Listing) # Specify the FROM clause for count
+    count_result = await db.execute(count_stmt)
+    total_count = count_result.scalar_one_or_none() or 0
+
+    if total_count == 0:
+        return [], 0
+
+    # Query for the page data
+    stmt = select(models.Listing).where(
+        models.Listing.buyer_id == user.id,
+        models.Listing.status == models.ListingStatus.SOLD
+    ).options(
+        # Load data needed for display
+        joinedload(models.Listing.meal),
+        joinedload(models.Listing.seller) # Load seller info
+    ).order_by(
+        models.Listing.sold_at.desc() # Newest purchases first
+    ).offset(offset).limit(page_size)
+
+    result = await db.execute(stmt)
+    listings = result.scalars().all()
+    logger.debug(f"Found {len(listings)} purchases on page {page} for user {user_telegram_id} (Total: {total_count})")
+    return listings, total_count
+
+async def get_user_sale_history(db: AsyncSession, user_telegram_id: int, page: int = 0, page_size: int = 5) -> tuple[list[models.Listing], int]:
+    """Fetches paginated sale history (SOLD listings) for a user."""
+    logger.debug(f"Fetching sale history for user {user_telegram_id}, page {page}")
+    user = await get_user_by_telegram_id(db, user_telegram_id)
+    if not user:
+        return [], 0
+
+    offset = page * page_size
+
+    # Query for total count
+    count_stmt = select(func.count(models.Listing.id)).where(
+        models.Listing.seller_id == user.id,
+        models.Listing.status == models.ListingStatus.SOLD # Only show successful sales
+    ).select_from(models.Listing)
+    count_result = await db.execute(count_stmt)
+    total_count = count_result.scalar_one_or_none() or 0
+
+    if total_count == 0:
+        return [], 0
+
+    # Query for the page data
+    stmt = select(models.Listing).where(
+        models.Listing.seller_id == user.id,
+        models.Listing.status == models.ListingStatus.SOLD
+    ).options(
+        # Load data needed for display
+        joinedload(models.Listing.meal),
+        joinedload(models.Listing.buyer) # Load buyer info
+    ).order_by(
+        models.Listing.sold_at.desc() # Newest sales first
+    ).offset(offset).limit(page_size)
+
+    result = await db.execute(stmt)
+    listings = result.scalars().all()
+    logger.debug(f"Found {len(listings)} sales on page {page} for user {user_telegram_id} (Total: {total_count})")
+    return listings, total_count
+
+# async def mark_listing_as_sold(db: AsyncSession, listing_id: int, buyer_telegram_id: int) -> models.Listing | None:
+#     """Marks a listing as sold to a specific buyer."""
+#     logger.info(f"Attempting to mark listing {listing_id} as sold to user {buyer_telegram_id}")
+#     listing = await get_listing_by_id(db, listing_id)
+#     if not listing:
+#         logger.warning(f"Listing {listing_id} not found for purchase attempt.")
+#         return None # Listing doesn't exist
+#
+#     if listing.status != models.ListingStatus.AVAILABLE:
+#         logger.warning(f"Listing {listing_id} is not available for purchase (status: {listing.status}).")
+#         return None # Listing not available (already sold or pending)
+#
+#     buyer_user = await get_user_by_telegram_id(db, buyer_telegram_id)
+#     if not buyer_user:
+#         logger.error(f"Buyer user with Telegram ID {buyer_telegram_id} not found in DB.")
+#         # Or should we create the buyer if they somehow don't exist? Unlikely after /start.
+#         return None # Buyer doesn't exist
+#
+#     if listing.seller_id == buyer_user.id:
+#         logger.warning(f"User {buyer_telegram_id} attempted to buy their own listing {listing_id}.")
+#         # Depending on rules, you might disallow this
+#         return None # Prevent buying own listing
+#
+#     # Use the model's method to update state
+#     listing.mark_as_sold(buyer_user=buyer_user)
+#     logger.info(f"Listing {listing_id} marked as sold in object. Committing...")
+#
+#     try:
+#         # Add the listing to the session if it wasn't already tracked or became detached
+#         db.add(listing)
+#         await db.commit()
+#         await db.refresh(listing) # Refresh to get updated timestamps etc.
+#         logger.info(f"Successfully committed listing {listing_id} as SOLD to buyer {buyer_user.id}.")
+#         return listing
+#     except Exception as e:
+#         await db.rollback()
+#         logger.error(f"Database error marking listing {listing_id} as sold: {e}", exc_info=True)
+#         return None # Indicate failure
+
 
