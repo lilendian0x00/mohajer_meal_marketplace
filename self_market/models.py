@@ -146,8 +146,8 @@ class Listing(Base):
     #reservation_id = Column(Integer, ForeignKey('meal_reservations.id'), unique=True, nullable=False)
     seller_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
     buyer_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True) # Null until sold
-    # Temporarily stores the buyer who initiated the purchase, before seller confirms payment
-    pending_buyer_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True)
+    pending_buyer_id = Column(Integer, ForeignKey('users.id'), nullable=True, index=True) # Temporarily stores the buyer who initiated the purchase, before seller confirms payment
+
     price = Column(Numeric(10, 2), nullable=False) # Price for the listing
     status = Column(SQLEnum(ListingStatus, name="listing_status_enum"), default=ListingStatus.AVAILABLE, nullable=False, index=True)
 
@@ -160,6 +160,9 @@ class Listing(Base):
     sold_at = Column(DateTime(timezone=True), nullable=True) # When the sale was finalized
     pending_until = Column(DateTime(timezone=True), nullable=True) # Purchase timeout
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
+
+    cancelled_by_buyer_at = Column(DateTime(timezone=True), nullable=True)  # Track if buyer cancelled pending
+    rejected_by_seller_at = Column(DateTime(timezone=True), nullable=True)  # Track if seller rejected pending
 
     # Relationships
     # reservation = relationship(
@@ -180,6 +183,13 @@ class Listing(Base):
         ,lazy="selectin"
     )
 
+    pending_buyer_relation = relationship(
+        'User',
+        # Explicitly state the foreign key column for this relationship
+        foreign_keys=[pending_buyer_id],
+        # No back_populates needed unless User needs a direct link to listings they have pending
+        lazy="selectin"  # Or "joined", depending on usage pattern. Selectin is often efficient here.
+    )
     # def mark_as_sold(self, buyer_user: 'User') -> None:
     #     """Marks the listing as sold to the given buyer."""
     #     if self.status == ListingStatus.SOLD:

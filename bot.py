@@ -121,10 +121,19 @@ class TelegramBot:
             self.application.add_handler(CallbackQueryHandler(
                 handlers.handle_cancel_purchase, pattern=r'^cancel_buy$'
             ), group=1)
+            self.application.add_handler(CallbackQueryHandler(  # Buyer cancels AFTER confirming and seeing seller details
+                    handlers.handle_buyer_cancel_pending, pattern=fr'^{handlers.CALLBACK_BUYER_CANCEL_PENDING}_\d+$'
+            ), group=1)
+
 
             # Seller Confirmation
             self.application.add_handler(CallbackQueryHandler(
                 handlers.handle_seller_confirmation, pattern=r'^seller_confirm_\d+$'
+            ), group=1)
+
+            # Seller Rejection
+            self.application.add_handler(CallbackQueryHandler(  # Seller rejects/cancels pending purchase
+                handlers.handle_seller_reject_pending, pattern=fr'^{handlers.CALLBACK_SELLER_REJECT_PENDING}_\d+$'
             ), group=1)
 
             # Settings Flow Callback

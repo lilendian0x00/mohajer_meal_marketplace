@@ -7,6 +7,7 @@ from decimal import Decimal, InvalidOperation
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, Contact, InlineKeyboardButton, \
     InlineKeyboardMarkup
 from telegram.constants import ParseMode
+from telegram.error import Forbidden, BadRequest
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters, CommandHandler # Import conversation components
 from config import HISTORY_PAGE_SIZE
 import utility
@@ -27,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 # Define Callback Data Constant
 CALLBACK_CANCEL_SELL_FLOW = "cancel_sell_flow"
+CALLBACK_BUYER_CANCEL_PENDING = "buyer_cancel_pending"
+CALLBACK_SELLER_REJECT_PENDING = "seller_reject_pending"
 
 # Helper Function for Main Menu Keyboard
 def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -1063,45 +1066,77 @@ async def handle_confirm_purchase(update: Update, context: ContextTypes.DEFAULT_
     # Notify Buyer and Seller
     if updated_listing and seller_card_number and seller_telegram_id:
         price_str = f"{updated_listing.price:,.0f}" if updated_listing.price is not None else "مبلغ"
-        buyer_message = (  # Buyer message including card number - RISK!
-            f"درخواست خرید شما برای آگهی `{listing_id}` ثبت شد.\n"
+        # Escape meal_desc for V2 *before* using it in the f-string for buyer
+        meal_desc_escaped = utility.escape_markdown_v2(
+            updated_listing.meal.description if updated_listing.meal else "غذا")
+
+        buyer_message = (
+            f"درخواست خرید شما برای آگهی `{listing_id}` ({meal_desc_escaped}) ثبت شد\\.\n"  # Escape dot for V2
             f"⏳ لطفا مبلغ **{price_str} تومان** را به شماره کارت زیر واریز نمایید:\n\n"
-            f"💳 **`{seller_card_number}`**\n\n"  # !!! SECURITY RISK !!!
-            f"پس از واریز، فروشنده باید دریافت وجه را تایید کند تا کد رزرو برای شما ارسال شود.\n"
-            f"🚨 **هشدار:** این ربات مسئولیتی در قبال تراکنش‌های مالی ندارد. با احتیاط اقدام کنید."
+            f"💳 `{utility.escape_markdown_v2(seller_card_number)}`\n\n"  # Escape potential special chars in card num
+            f"پس از واریز، فروشنده باید دریافت وجه را تایید کند\\.\n"  # Escape dot
+            f"🚨 *هشدار:* ربات مسئولیتی در قبال تراکنش ندارد\\.\n\n"  # Escape dot
+            f"در صورت انصراف از خرید، دکمه زیر را بزنید:"
         )
+        buyer_cancel_button = InlineKeyboardButton(
+            "❌ لغو درخواست خرید",
+            callback_data=f'{CALLBACK_BUYER_CANCEL_PENDING}_{listing_id}'
+        )
+        buyer_markup = InlineKeyboardMarkup([[buyer_cancel_button]])
+
         # Edit buyer's message first
-        await query.edit_message_text(buyer_message, parse_mode=ParseMode.MARKDOWN)
+        await query.edit_message_text(buyer_message, parse_mode=ParseMode.MARKDOWN, reply_markup=buyer_markup)
 
         # Notify Seller
         try:
-            buyer_name = user.first_name or user.username or f"کاربر {user.id}"
-
-            meal_desc = updated_listing.meal.description if updated_listing.meal else "غذا"
+            # Escape buyer name for V2
+            buyer_name_escaped = utility.escape_markdown_v2(user.first_name or user.username or f"کاربر {user.id}")
+            # Escape price string just in case it contains '.' or other chars (though unlikely for price_str)
+            price_str_escaped = utility.escape_markdown_v2(price_str)
 
             seller_confirm_button = InlineKeyboardButton(
                 "✅ تایید دریافت وجه",
                 callback_data=f'seller_confirm_{listing_id}'
             )
-            seller_markup = InlineKeyboardMarkup([[seller_confirm_button]])
-            seller_message = (
-                f"🔔 درخواست خرید جدید برای آگهی شما!\n\n"
-                f"آگهی: `{listing_id}` ({meal_desc})\n"  # Use corrected meal_desc
-                f"خریدار: {buyer_name} (ID: `{user.id}`)\n"
-                f"مبلغ: {price_str} تومان\n\n"
-                f"خریدار اطلاعات کارت شما را دریافت کرد. لطفا پس از دریافت وجه، دکمه زیر را بزنید تا کد رزرو برای خریدار ارسال شود."
+            seller_reject_button = InlineKeyboardButton(
+                "❌ رد کردن / لغو",
+                callback_data=f'{CALLBACK_SELLER_REJECT_PENDING}_{listing_id}'
             )
+            seller_markup = InlineKeyboardMarkup([[seller_confirm_button, seller_reject_button]])
+
+            seller_message = (
+                f"🔔 درخواست خرید جدید برای آگهی شما\\!\n\n"
+                # Escape the parentheses around meal_desc_escaped -> \\( ... \\)
+                f"آگهی: `{listing_id}` \\({meal_desc_escaped}\\)\n"
+                f"خریدار: {buyer_name_escaped} \\(ID: `{user.id}`\\)\n"
+                f"مبلغ: {price_str_escaped} تومان\n\n"
+                f"خریدار اطلاعات کارت شما را دریافت کرد\\. لطفا *پس از دریافت وجه*، دکمه 'تایید دریافت وجه' را بزنید\\.\n"
+                f"در صورت عدم تمایل به فروش به این کاربر یا مشکل دیگر، دکمه 'رد کردن / لغو' را بزنید\\."
+            )
+
             # Send notification to seller
             await context.bot.send_message(
                 chat_id=seller_telegram_id,
                 text=seller_message,
                 reply_markup=seller_markup,
-                parse_mode=ParseMode.MARKDOWN
-                )
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
             logger.info(f"Notified seller {seller_telegram_id} about pending sale {listing_id}")
+        except BadRequest as e:
+            # Log the V2 specific error
+            logger.error(f"Failed to notify seller {seller_telegram_id} for pending sale {listing_id} using V2: {e}", exc_info=True)
+            # Try sending a fallback simple message (without markdown)
+            try:
+                fallback_text = f"درخواست خرید جدید برای آگهی {listing_id} از کاربر {user.first_name or user.id}. لطفا برای تایید یا رد به ربات مراجعه کنید."
+                await context.bot.send_message(chat_id=seller_telegram_id, text=fallback_text)
+            except Exception as fallback_err:
+                logger.error(f"Failed to send even fallback notification to seller {seller_telegram_id}: {fallback_err}")
         except Exception as notify_err:
-            logger.error(f"Failed to notify seller {seller_telegram_id} for pending sale {listing_id}: {notify_err}", exc_info=True)
-            await context.bot.send_message(user.id, "خطا در ارسال پیام به فروشنده. لطفا با پشتیبانی تماس بگیرید.") # Inform buyer
+            logger.error(
+                f"Unexpected error notifying seller {seller_telegram_id} for pending sale {listing_id}: {notify_err}",
+                exc_info=True)
+            # Inform buyer about the notification failure
+            await context.bot.send_message(user.id, "خطا در ارسال پیام به فروشنده. لطفا با پشتیبانی تماس بگیرید.")
     else:
         # Handle failure: edit buyer's original message if possible
         try:
@@ -1109,6 +1144,151 @@ async def handle_confirm_purchase(update: Update, context: ContextTypes.DEFAULT_
         except Exception as edit_err:
             logger.error(f"Failed to edit buyer message after purchase confirmation failure: {edit_err}")
 
+
+
+async def handle_buyer_cancel_pending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles the buyer cancelling a purchase in AWAITING_CONFIRMATION state."""
+    query = update.callback_query
+    user = update.effective_user # Buyer
+    await query.answer("در حال لغو درخواست...")
+
+    if not query.data: return
+
+    try:
+        listing_id = int(query.data.split('_')[-1])
+    except (ValueError, IndexError):
+        logger.error(f"Invalid callback data for buyer cancel pending: {query.data}")
+        await query.edit_message_text("خطای داخلی: دکمه نامعتبر.")
+        return
+
+    logger.info(f"Buyer {user.id} initiated cancellation for pending listing {listing_id}")
+
+    updated_listing: models.Listing | None = None
+    seller_tg_id: int | None = None
+    error_message = "خطا در لغو درخواست." # Default error
+
+    try:
+        async with get_db_session() as db_session:
+            updated_listing, seller_tg_id = await crud.cancel_pending_purchase_by_buyer(
+                db=db_session,
+                listing_id=listing_id,
+                buyer_telegram_id=user.id
+            )
+            if not updated_listing:
+                # Check specific reasons if needed, e.g., listing not found or not pending
+                listing_check = await crud.get_listing_by_id(db_session, listing_id)
+                if not listing_check: error_message = "آگهی یافت نشد."
+                elif listing_check.status != models.ListingStatus.AWAITING_CONFIRMATION: error_message="این درخواست دیگر در انتظار تایید نیست."
+                elif listing_check.pending_buyer_id != user.id: error_message="شما درخواست‌دهنده این خرید نیستید."
+
+    except Exception as e:
+        logger.error(f"Error handling buyer cancellation for listing {listing_id}: {e}", exc_info=True)
+        error_message = "خطای جدی هنگام لغو رخ داد."
+
+    if updated_listing:
+        # Edit buyer's message
+        meal_desc = updated_listing.meal.description if updated_listing.meal else "غذا"
+        await query.edit_message_text(
+            f"✅ درخواست خرید شما برای آگهی `{listing_id}` ({meal_desc}) لغو شد.\n"
+            f"این آگهی مجددا در دسترس قرار گرفت.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=None # Remove buttons
+        )
+        # Notify Seller
+        if seller_tg_id:
+            try:
+                seller_message = (
+                    f"❌ خریدار درخواست خرید برای آگهی `{listing_id}` ({meal_desc}) را لغو کرد.\n"
+                    f"این آگهی مجدداً در وضعیت **موجود** قرار گرفت."
+                )
+                await context.bot.send_message(
+                    chat_id=seller_tg_id,
+                    text=seller_message,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                logger.info(f"Notified seller {seller_tg_id} about buyer cancellation for listing {listing_id}")
+            except (Forbidden, BadRequest) as e:
+                logger.warning(f"Failed to notify seller {seller_tg_id} about buyer cancellation for {listing_id}: {e}")
+            except Exception as notify_err:
+                logger.error(f"Unexpected error notifying seller {seller_tg_id} about buyer cancellation for {listing_id}: {notify_err}", exc_info=True)
+        else:
+            logger.warning(f"Seller TG ID not found for notification on buyer cancellation of listing {listing_id}")
+
+    else:
+        # Failed to cancel, inform buyer via editing their message
+        await query.edit_message_text(f"⚠️ {error_message}\nلطفا وضعیت را بررسی کنید یا با پشتیبانی تماس بگیرید.", reply_markup=None)
+
+
+async def handle_seller_reject_pending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles the seller rejecting/cancelling a purchase in AWAITING_CONFIRMATION state."""
+    query = update.callback_query
+    user = update.effective_user # Seller
+    await query.answer("در حال رد کردن درخواست...")
+
+    if not query.data: return
+
+    try:
+        listing_id = int(query.data.split('_')[-1])
+    except (ValueError, IndexError):
+        logger.error(f"Invalid callback data for seller reject pending: {query.data}")
+        await query.edit_message_text("خطای داخلی: دکمه نامعتبر.")
+        return
+
+    logger.info(f"Seller {user.id} initiated rejection for pending listing {listing_id}")
+
+    updated_listing: models.Listing | None = None
+    buyer_tg_id: int | None = None
+    error_message = "خطا در رد کردن درخواست." # Default error
+
+    try:
+        async with get_db_session() as db_session:
+            updated_listing, buyer_tg_id = await crud.reject_pending_purchase_by_seller(
+                db=db_session,
+                listing_id=listing_id,
+                seller_telegram_id=user.id
+            )
+            if not updated_listing:
+                # Check specific reasons if needed
+                listing_check = await crud.get_listing_by_id(db_session, listing_id)
+                if not listing_check: error_message = "آگهی یافت نشد."
+                elif listing_check.status != models.ListingStatus.AWAITING_CONFIRMATION: error_message="این درخواست دیگر در انتظار تایید نیست."
+                elif listing_check.seller_id != user.id: error_message="شما فروشنده این آگهی نیستید."
+
+    except Exception as e:
+        logger.error(f"Error handling seller rejection for listing {listing_id}: {e}", exc_info=True)
+        error_message = "خطای جدی هنگام رد کردن رخ داد."
+
+    if updated_listing:
+        # Edit seller's message
+        meal_desc = updated_listing.meal.description if updated_listing.meal else "غذا"
+        await query.edit_message_text(
+            f"✅ درخواست خرید برای آگهی `{listing_id}` ({meal_desc}) توسط شما رد/لغو شد.\n"
+            f"این آگهی مجددا در دسترس قرار گرفت.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=None # Remove buttons
+        )
+        # Notify Buyer
+        if buyer_tg_id:
+            try:
+                buyer_message = (
+                    f"❌ متاسفانه فروشنده درخواست خرید شما برای آگهی `{listing_id}` ({meal_desc}) را رد/لغو کرد.\n"
+                    f"این آگهی مجدداً در وضعیت **موجود** قرار گرفته است. در صورت تمایل می‌توانید دوباره تلاش کنید یا آگهی دیگری را بررسی کنید."
+                )
+                await context.bot.send_message(
+                    chat_id=buyer_tg_id,
+                    text=buyer_message,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                logger.info(f"Notified buyer {buyer_tg_id} about seller rejection for listing {listing_id}")
+            except (Forbidden, BadRequest) as e:
+                logger.warning(f"Failed to notify buyer {buyer_tg_id} about seller rejection for {listing_id}: {e}")
+            except Exception as notify_err:
+                logger.error(f"Unexpected error notifying buyer {buyer_tg_id} about seller rejection for {listing_id}: {notify_err}", exc_info=True)
+        else:
+            logger.warning(f"Buyer TG ID not found for notification on seller rejection of listing {listing_id}")
+    else:
+        # Failed to reject, inform seller via editing their message
+        await query.edit_message_text(f"⚠️ {error_message}\nلطفا وضعیت را بررسی کنید یا با پشتیبانی تماس بگیرید.", reply_markup=None)
 
 async def handle_seller_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles seller confirmation, calls finalize, sends code to buyer."""

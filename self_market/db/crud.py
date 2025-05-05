@@ -222,6 +222,114 @@ async def set_listing_awaiting_confirmation(
         return None
 
 
+async def cancel_pending_purchase_by_buyer(
+    db: AsyncSession, listing_id: int, buyer_telegram_id: int
+) -> tuple[models.Listing | None, int | None]:
+    """
+    Allows the pending buyer to cancel their purchase request.
+    Reverts the listing to AVAILABLE.
+    Returns (updated_listing, seller_telegram_id) or (None, None).
+    """
+    logger.info(f"Buyer {buyer_telegram_id} attempting to cancel pending purchase for listing {listing_id}")
+    try:
+        # Fetch listing with seller and pending buyer info
+        stmt = select(models.Listing).where(models.Listing.id == listing_id).options(
+            joinedload(models.Listing.seller),
+            joinedload(models.Listing.pending_buyer_relation).load_only(models.User.telegram_id) # Load only TG ID of pending buyer
+        )
+        result = await db.execute(stmt)
+        listing = result.scalar_one_or_none()
+
+        if not listing:
+            logger.warning(f"Buyer cancellation failed: Listing {listing_id} not found.")
+            return None, None
+
+        # Verify status is AWAITING_CONFIRMATION
+        if listing.status != models.ListingStatus.AWAITING_CONFIRMATION:
+            logger.warning(f"Buyer cancellation failed: Listing {listing_id} is not AWAITING_CONFIRMATION (Status: {listing.status}).")
+            return None, None
+
+        # Verify the user cancelling is the pending buyer
+        if not listing.pending_buyer_relation or listing.pending_buyer_relation.telegram_id != buyer_telegram_id:
+            logger.warning(f"Buyer cancellation failed: User {buyer_telegram_id} is not the pending buyer for listing {listing_id}.")
+            return None, None
+
+        # Get seller TG ID for notification before potential detachment
+        seller_tg_id = listing.seller.telegram_id if listing.seller else None
+
+        # Perform cancellation
+        listing.status = models.ListingStatus.AVAILABLE # Revert to available
+        listing.pending_buyer_id = None
+        listing.pending_buyer_relation = None # Detach relation in memory
+        listing.pending_until = None
+        listing.cancelled_by_buyer_at = datetime.now(timezone.utc) # Mark cancellation time
+
+        db.add(listing)
+        await db.commit()
+        await db.refresh(listing) # Refresh the listing state
+        logger.info(f"Successfully cancelled pending purchase for listing {listing_id} by buyer {buyer_telegram_id}.")
+        return listing, seller_tg_id
+
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"DB error cancelling pending purchase by buyer for listing {listing_id}: {e}", exc_info=True)
+        return None, None
+
+
+async def reject_pending_purchase_by_seller(
+    db: AsyncSession, listing_id: int, seller_telegram_id: int
+) -> tuple[models.Listing | None, int | None]:
+    """
+    Allows the seller to reject/cancel a pending purchase request.
+    Reverts the listing to AVAILABLE.
+    Returns (updated_listing, buyer_telegram_id) or (None, None).
+    """
+    logger.info(f"Seller {seller_telegram_id} attempting to reject/cancel pending purchase for listing {listing_id}")
+    try:
+        # Fetch listing with seller and pending buyer info
+        stmt = select(models.Listing).where(models.Listing.id == listing_id).options(
+            joinedload(models.Listing.seller).load_only(models.User.telegram_id), # Load only TG ID of seller
+            joinedload(models.Listing.pending_buyer_relation) # Load pending buyer for notification
+        )
+        result = await db.execute(stmt)
+        listing = result.scalar_one_or_none()
+
+        if not listing:
+            logger.warning(f"Seller rejection failed: Listing {listing_id} not found.")
+            return None, None
+
+        # Verify ownership
+        if not listing.seller or listing.seller.telegram_id != seller_telegram_id:
+            logger.warning(f"Seller rejection failed: User {seller_telegram_id} is not the seller of listing {listing_id}.")
+            return None, None
+
+        # Verify status is AWAITING_CONFIRMATION
+        if listing.status != models.ListingStatus.AWAITING_CONFIRMATION:
+            logger.warning(f"Seller rejection failed: Listing {listing_id} is not AWAITING_CONFIRMATION (Status: {listing.status}).")
+            return None, None
+
+        # Get pending buyer TG ID for notification before potential detachment
+        buyer_tg_id = listing.pending_buyer_relation.telegram_id if listing.pending_buyer_relation else None
+
+        # Perform rejection (similar to buyer cancellation)
+        listing.status = models.ListingStatus.AVAILABLE # Revert to available
+        listing.pending_buyer_id = None
+        listing.pending_buyer_relation = None # Detach relation in memory
+        listing.pending_until = None
+        listing.rejected_by_seller_at = datetime.now(timezone.utc) # Mark rejection time
+
+        db.add(listing)
+        await db.commit()
+        await db.refresh(listing) # Refresh the listing state
+        logger.info(f"Successfully rejected pending purchase for listing {listing_id} by seller {seller_telegram_id}.")
+        return listing, buyer_tg_id
+
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"DB error rejecting pending purchase by seller for listing {listing_id}: {e}", exc_info=True)
+        return None, None
+
+
 async def finalize_listing_sale(
     db: AsyncSession, listing_id: int, confirming_seller_telegram_id: int
 ) -> tuple[models.Listing | None, str | None]: # Use tuple for clearer return type hint
@@ -233,16 +341,13 @@ async def finalize_listing_sale(
     logger.info(f"Seller {confirming_seller_telegram_id} confirming payment for listing {listing_id}")
 
     # Fetch the listing, ensuring seller and meal details are loaded upfront
-    listing = await db.execute(
-        select(models.Listing)
-        .where(models.Listing.id == listing_id)
-        .options(
-            joinedload(models.Listing.seller), # Load seller for checks
-            joinedload(models.Listing.meal)     # Load meal for potential notifications later
-        )
+    stmt = select(models.Listing).where(models.Listing.id == listing_id).options(
+        joinedload(models.Listing.seller),  # Load seller for checks
+        joinedload(models.Listing.meal),            # Load meal for potential notifications later
+        joinedload(models.Listing.pending_buyer_relation)  # Load pending buyer relation
     )
-
-    listing = listing.scalar_one_or_none()
+    result = await db.execute(stmt)
+    listing = result.scalar_one_or_none()
 
     # --- Perform Checks ---
     if not listing:
@@ -272,13 +377,16 @@ async def finalize_listing_sale(
 
     # --- Prepare for Update ---
     reservation_code = listing.university_reservation_code # Get code before potential state changes
+    pending_buyer_user = listing.pending_buyer_relation  # Get buyer from the loaded relationship
 
     # --- Finalize the Sale Attributes ---
     listing.status = models.ListingStatus.SOLD
-    listing.buyer_id = listing.pending_buyer_id # Set final buyer FK from pending FK
-    listing.buyer = pending_buyer_user # Associate the fetched buyer object in memory
-    listing.pending_buyer_id = None # Clear pending buyer ID
+    listing.buyer_id = listing.pending_buyer_id     # Set final buyer FK from pending FK
+    listing.buyer = pending_buyer_user              # Associate the fetched buyer object in memory
+    listing.pending_buyer_id = None                 # Clear pending buyer ID
+    listing.pending_buyer_relation = None           # Clear pending buyer relationship in memory
     listing.sold_at = datetime.now(timezone.utc)
+    listing.pending_until = None  # Clear timeout
 
     # --- Commit and Refresh ---
     try:
