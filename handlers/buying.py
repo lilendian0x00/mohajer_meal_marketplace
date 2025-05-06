@@ -3,6 +3,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.error import Forbidden, BadRequest
 from telegram.ext import ContextTypes
+from telegram.helpers import escape_markdown
+
 from .common import (
     CALLBACK_BUY_REFRESH, CALLBACK_BUYER_CANCEL_PENDING,
     CALLBACK_SELLER_REJECT_PENDING, get_main_menu_keyboard
@@ -40,33 +42,47 @@ async def _generate_buy_food_response(db_session: crud.AsyncSession) -> tuple[st
     inline_buttons = [] # List to hold button rows
 
     for listing in available_listings:
-        meal_desc = "غذای نامشخص"
-        meal_date_str = "نامشخص"
-        meal_type = "نامشخص"
+        meal_desc_raw = "غذای نامشخص"
+        meal_date_str_raw = "نامشخص"
+        meal_type_raw = "نامشخص"
+
         if listing.meal:
             meal = listing.meal
-            meal_desc = meal.description or meal_desc
-            meal_type = meal.meal_type or meal_type
+            meal_desc_raw = meal.description or meal_desc_raw
+            meal_type_raw = meal.meal_type or meal_type_raw
             if meal.date:
-                try: meal_date_str = meal.date.strftime('%Y-%m-%d')
-                except AttributeError: meal_date_str = str(meal.date)
+                try:
+                    meal_date_str_raw = meal.date.strftime('%Y-%m-%d')
+                except AttributeError:
+                    meal_date_str_raw = str(meal.date)  # Fallback if strftime fails or date is already string
+
+        # Escape user-generated content
+        meal_desc = escape_markdown(meal_desc_raw, version=2)
+        meal_type = escape_markdown(meal_type_raw, version=2)
+        meal_date_str = escape_markdown(meal_date_str_raw, version=2)
 
         # Escape seller name for Markdown V2 compatibility if needed, or use regular Markdown
-        seller_name = "ناشناس"
+        seller_name_raw_display = "ناشناس"
+        if listing.seller and listing.seller.first_name:
+            seller_name_raw_display = listing.seller.first_name
+
+        # Prepare the display part of the link, escaping it
+        escaped_seller_display_name = escape_markdown(seller_name_raw_display, version=2)
+
         if listing.seller:
-            # Prioritize username, then first name, then default
-            seller_name = f"@{listing.seller.username}" if listing.seller.username else (listing.seller.first_name or seller_name)
+            # Construct the Markdown link *after* escaping the display part
+            seller_name = f"[{escaped_seller_display_name}](tg://user?id={listing.seller.telegram_id})"
+        else:
+            seller_name = escaped_seller_display_name  # Fallback to just the escaped name if no seller object or ID
 
-        price_str = f"{listing.price:,.0f}" if listing.price is not None else "نامشخص"
+        price_str_raw = f"{listing.price:,.0f}" if listing.price is not None else "نامشخص"
+        price_str = escape_markdown(price_str_raw, version=2)
 
-        # Using regular Markdown for simplicity here, adjust if V2 is strictly required
         part = (
-            f"🍽️ *{meal_desc}* ({meal_type} - {meal_date_str})\n"
+            f"🍽️ *{meal_desc}* \\({meal_type} \\- {meal_date_str}\\)\n"
             f"👤 فروشنده: {seller_name}\n"
             f"💰 قیمت: {price_str} تومان\n"
-            f"🆔 شماره آگهی: `{listing.id}`\n"
-            # Moved button generation outside this formatted string
-            # f"--------------------\n" # Add separator later if needed before buttons
+            f"🆔 شماره آگهی: `{listing.id}`\n"  # listing.id is an int, doesn't need escaping inside backticks
         )
         response_parts.append(part)
 
@@ -78,7 +94,7 @@ async def _generate_buy_food_response(db_session: crud.AsyncSession) -> tuple[st
             )
         ])
         # Add a separator after each listing's details
-        response_parts.append("--------------------\n")
+        response_parts.append(escape_markdown("--------------------", version=2) + "\n")
 
     # Add the refresh button as the last row
     inline_buttons.append([refresh_button])
@@ -129,7 +145,7 @@ async def handle_buy_food(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # Send the response
         await message.reply_text(
             message_text,
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.MARKDOWN_V2,
             reply_markup=reply_markup,
             disable_web_page_preview=True  # Good practice for lists
         )
@@ -157,7 +173,7 @@ async def handle_buy_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
             await query.edit_message_text(
                 text=message_text,
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.MARKDOWN_V2,
                 reply_markup=reply_markup,
                 disable_web_page_preview=True
             )
@@ -227,36 +243,51 @@ async def handle_purchase_button(update: Update, context: ContextTypes.DEFAULT_T
              await query.edit_message_text("شما نمی‌توانید آگهی خودتان را بخرید.")
              return
 
-        meal_desc="نامشخص"; meal_date_str="نامشخص"; meal_type="نامشخص"
+        meal_desc_raw = "نامشخص"
+        meal_date_str_raw = "نامشخص"
+        meal_type_raw = "نامشخص"
+
         # Access meal directly from listing
         if listing.meal:
-            meal=listing.meal
-            meal_desc=meal.description or meal_desc
-            meal_type=meal.meal_type or meal_type
+            meal = listing.meal
+            meal_desc_raw = meal.description or meal_desc_raw
+            meal_type_raw = meal.meal_type or meal_type_raw
             if meal.date:
-                 try: meal_date_str=meal.date.strftime('%Y-%m-%d')
-                 except AttributeError: meal_date_str=str(meal.date)
+                try:
+                    meal_date_str_raw = meal.date.strftime('%Y-%m-%d')
+                except AttributeError:
+                    meal_date_str_raw = str(meal.date)
 
-        seller_name = listing.seller.first_name or listing.seller.username if listing.seller else "ناشناس"
-        price_str = f"{listing.price:,.0f}" if listing.price is not None else "نامشخص"
+        # Escape all dynamic parts for MarkdownV2
+        meal_desc = escape_markdown(meal_desc_raw, version=2)
+        meal_type = escape_markdown(meal_type_raw, version=2)
+        meal_date_str = escape_markdown(meal_date_str_raw, version=2)
+
+        seller_name = f"[{escape_markdown(f"{listing.seller.first_name}", version=2)}](tg://user?id={listing.seller.telegram_id})"
+
+        price_raw = listing.price
+        price_str = escape_markdown(f"{price_raw:,.0f}" if price_raw is not None else "نامشخص", version=2)
+        listing_id_str = escape_markdown(str(listing.id), version=2)
 
         # Use the corrected variables here
         confirmation_text = (
-            "⚠️ **تایید خرید** ⚠️\n\n"
+            "⚠️ *تایید خرید* ⚠️\n\n"
             f"شما در حال خرید:\n"
-            f"🍽️ *{meal_desc}* ({meal_type} - {meal_date_str})\n"
+            # Escaped literal parentheses here:
+            f"🍽️ _{meal_desc}_ \\({meal_type} \\- {meal_date_str}\\)\n"
             f"👤 از فروشنده: {seller_name}\n"
             f"💰 به قیمت: {price_str} تومان\n"
-            f"🆔 شماره آگهی: `{listing.id}`\n\n"
+            f"🆔 شماره آگهی: `{listing_id_str}`\n\n"
             "آیا خرید را تایید می‌کنید؟\n"
-            "(با تایید، اطلاعات پرداخت فروشنده به شما نمایش داده می‌شود و آگهی برای دیگران غیرفعال خواهد شد تا فروشنده پرداخت شما را تایید کند.)"
+            # Escaped literal parentheses here:
+            "_\\(با تایید، اطلاعات پرداخت فروشنده به شما نمایش داده می‌شود و آگهی برای دیگران غیرفعال خواهد شد تا فروشنده پرداخت شما را تایید کند\\.\\)_"
         )
         confirm_buttons = [[
             InlineKeyboardButton("✅ بله، خرید را تایید می‌کنم", callback_data=f'confirm_buy_{listing_id}'),
             InlineKeyboardButton("❌ لغو", callback_data='cancel_buy')
         ]]
         reply_markup = InlineKeyboardMarkup(confirm_buttons)
-        await query.edit_message_text(confirmation_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+        await query.edit_message_text(confirmation_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=reply_markup)
 
     except Exception as e:
         logger.error(f"Error preparing purchase confirmation for listing {listing_id}: {e}", exc_info=True)

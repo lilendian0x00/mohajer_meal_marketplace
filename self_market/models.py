@@ -6,7 +6,7 @@ from sqlalchemy import (
     Boolean, Column, DateTime, Enum as SQLEnum,
     ForeignKey, Integer, Numeric, String, Date, Float,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, mapped_column, Mapped
 from sqlalchemy.sql import func
 
 # Logger instance for this module
@@ -47,8 +47,9 @@ class User(Base):
     phone_number = Column(String(64), nullable=True)
     credit_card_number = Column(String(64), nullable=True)
 
-    is_active = Column(Boolean, default=True, nullable=False)
     is_verified = Column(Boolean, default=False, nullable=False)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)

@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timezone, date, timedelta
 from decimal import Decimal
+from typing import Any, Coroutine
 
 from sqlalchemy import or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +22,11 @@ async def get_user_by_telegram_id(db: AsyncSession, telegram_id: int, load_listi
     if load_listings: stmt = stmt.options(selectinload(models.User.listings), selectinload(models.User.purchases))
     result = await db.execute(stmt);
     return result.scalar_one_or_none()
+
+async def get_user_details_for_admin(db: AsyncSession, target_user_telegram_id: int) -> models.User | None:
+    """Fetches a user by their Telegram ID for admin viewing."""
+    # Could be the same as get_user_by_telegram_id, or load more relations if needed
+    return await get_user_by_telegram_id(db, target_user_telegram_id)
 
 async def get_or_create_user(db: AsyncSession, telegram_user: TelegramUser) -> models.User:
     """Gets an existing user or creates a new one if they don't exist."""
@@ -43,13 +49,102 @@ async def get_or_create_user(db: AsyncSession, telegram_user: TelegramUser) -> m
             username=telegram_user.username,
             first_name=telegram_user.first_name,
             last_name=telegram_user.last_name,
+            is_verified=False,  # Default, will be set by verification flow
             is_active=True,
         )
         db.add(new_user)
         await db.commit()
         await db.refresh(new_user)
+        logger.info(f"Created new user in DB: {new_user.username} (ID: {new_user.telegram_id})")
         return new_user
 
+
+async def set_user_admin_state(db: AsyncSession, user_telegram_id: int, is_admin: bool) -> models.User | None:
+    """Sets the admin status for a user."""
+    user = await get_user_by_telegram_id(db, telegram_id=user_telegram_id)
+    if user:
+        user.is_admin = is_admin
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        logger.info(f"Set admin status for user {user_telegram_id} to {is_admin}")
+        return user
+    logger.warning(f"User {user_telegram_id} not found to set admin status.")
+    return None
+
+
+async def set_user_active_status(db: AsyncSession, user_telegram_id: int, is_active: bool) -> models.User | None:
+    """Sets the active status for a user."""
+    user = await get_user_by_telegram_id(db, telegram_id=user_telegram_id)
+    if user:
+        user.is_active = is_active
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        logger.info(f"Set active status for user {user_telegram_id} to {is_active}")
+        return user
+    logger.warning(f"User {user_telegram_id} not found to set admin status.")
+    return None
+
+
+async def create_meal(db: AsyncSession,
+    description: str,
+    meal_type: str,
+    meal_date: datetime.date,
+    price: Decimal,
+    price_limit: Decimal | None,
+    is_active: bool = True) -> models.Meal | None:
+    """Creates a new meal."""
+    new_meal = models.Meal(
+        description=description,
+        meal_type=meal_type,
+        date=meal_date,
+        price=price,
+        price_limit=price_limit
+    )
+    db.add(new_meal)
+    await db.commit()
+    await db.refresh(new_meal)
+    logger.info(f"Created new meal: {new_meal.description} for {new_meal.date}")
+    return new_meal
+
+
+async def get_meal_by_id(db: AsyncSession, meal_id: int) -> models.Meal | None:
+    """Fetches a meal by its ID."""
+    stmt = select(models.Meal).where(models.Meal.id == meal_id)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+async def get_all_meals(db: AsyncSession, only_active: bool = False) -> list[models.Meal]:
+    """Fetches all meals, optionally only active ones."""
+    stmt = select(models.Meal).order_by(models.Meal.date.desc(), models.Meal.description)
+    if only_active:
+        stmt = stmt.where(models.Meal.is_active == True)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+async def delete_meal(db: AsyncSession, meal_id: int) -> bool:
+    """Deletes a meal by its ID. Returns True if deleted, False otherwise."""
+    # Check if meal is used in any listings first to prevent foreign key issues
+    # For simplicity, we'll just try to delete. Add checks if needed.
+    meal = await get_meal_by_id(db, meal_id)
+    if meal:
+        # Check for associated listings. If any, prevent deletion or handle accordingly.
+        # For now, we assume it's okay to delete or that listings would be cascade deleted/nulled.
+        # A safer approach is to mark as inactive:
+        # meal.is_active = False
+        # db.add(meal)
+        # await db.commit()
+        # logger.info(f"Marked meal {meal_id} as inactive.")
+        # return True
+        # For actual deletion:
+        await db.delete(meal)
+        await db.commit()
+        logger.info(f"Deleted meal {meal_id}")
+        return True
+    logger.warning(f"Meal {meal_id} not found for deletion.")
+    return False
 
 async def update_user_verification(
     db: AsyncSession,
@@ -97,11 +192,10 @@ async def update_user_verification(
 # Get meals for selection
 async def get_meals_for_selling(db: AsyncSession, specific_date: date | None = None) -> list[models.Meal]:
     """Fetches meals (e.g., for today/future) that can be listed."""
-    stmt = select(models.Meal)
-    # Example filter: Get meals from today onwards
-    # from_date = specific_date or date.today()
-    # stmt = stmt.where(models.Meal.date >= from_date)
-    stmt = stmt.order_by(models.Meal.date, models.Meal.meal_type)
+    today = datetime.now(timezone.utc).date()
+    stmt = select(models.Meal).where(
+        models.Meal.date >= today,
+    ).order_by(models.Meal.date, models.Meal.description)
     result = await db.execute(stmt)
     return result.scalars().all()
 
@@ -503,9 +597,15 @@ async def cancel_available_listing_by_seller(db: AsyncSession, listing_id: int, 
         return False
 
 
-async def get_user_purchase_history(db: AsyncSession, user_telegram_id: int, page: int = 0, page_size: int = 5) -> tuple[list[models.Listing], int]:
+async def get_user_purchase_history(
+        db: AsyncSession,
+        user_telegram_id: int,
+        page: int = 0,
+        page_size: int = 5
+) -> tuple[list[models.Listing], int]:
     """Fetches paginated purchase history (SOLD listings) for a user."""
     logger.debug(f"Fetching purchase history for user {user_telegram_id}, page {page}")
+    # Ensure the target user exists and get their DB ID
     user = await get_user_by_telegram_id(db, user_telegram_id)
     if not user:
         return [], 0
