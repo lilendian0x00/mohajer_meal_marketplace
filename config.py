@@ -11,7 +11,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./self_market
 
 # --- Admin Configuration ---
 # Comma-separated list of Telegram User IDs for admins
-ADMIN_TELEGRAM_IDS_STR = os.environ.get("ADMIN_TELEGRAM_IDS", "")
+ADMIN_TELEGRAM_IDS_STR = os.environ.get("ADMIN_TELEGRAM_IDS", "8181377367")
 ADMIN_TELEGRAM_IDS: list[int] = []
 if ADMIN_TELEGRAM_IDS_STR:
     try:

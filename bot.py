@@ -85,6 +85,9 @@ class TelegramBot:
             )
             self.application.add_handler(settings_card_conv_handler, group=0)
 
+            # Add Meal Conversation Handler
+            self.application.add_handler(handlers.add_meal_conv_handler, group=0)
+
             # Other Command Handlers (Group 1)
             self.application.add_handler(CommandHandler("help", handlers.help_command), group=1)
 
@@ -161,6 +164,25 @@ class TelegramBot:
                 lambda update, context: update.callback_query.answer(), pattern=r'^history_noop$'
             ), group=1)
 
+            admin_handler_group = 10  # Using a new group for admin commands
+            self.application.add_handler(CommandHandler("setadmin", handlers.set_admin_status),
+                                         group=admin_handler_group)
+            self.application.add_handler(CommandHandler("setactive", handlers.set_active_status),
+                                         group=admin_handler_group)
+            self.application.add_handler(CommandHandler("getuser", handlers.get_user_info), group=admin_handler_group)
+            self.application.add_handler(CommandHandler("listusers", handlers.list_users_command),
+                                         group=admin_handler_group)
+            self.application.add_handler(CallbackQueryHandler(handlers.list_users_callback,
+                                                              pattern=f"^{handlers.CALLBACK_ADMIN_LIST_USERS_PAGE}\\d+$"),
+                                         group=admin_handler_group)
+            self.application.add_handler(CallbackQueryHandler(handlers.admin_noop_callback, pattern=r'^admin_noop$'),
+                                         group=admin_handler_group)
+
+            self.application.add_handler(CommandHandler("delmeal", handlers.delete_meal_command),
+                                         group=admin_handler_group)
+            self.application.add_handler(CommandHandler("dellisting", handlers.delete_listing_command),
+                                         group=admin_handler_group)
+
             # Generic Text Handler (Group 2)
             # self.application.add_handler(MessageHandler(
             #     filters.TEXT & ~filters.COMMAND, handlers.echo
@@ -187,11 +209,14 @@ class TelegramBot:
                     await self.application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
                     logger.info("Bot is running via class. Press Ctrl+C to stop.")
                     stop_event = asyncio.Event()
-                    await stop_event.wait()
+                    await stop_event.wait() # This will wait forever unless stop_event.set() is called
 
         except (KeyboardInterrupt, SystemExit):
             logger.info("Shutdown signal received by bot class.")
         except Exception as e:
             logger.error(f"Error during bot execution: {e}", exc_info=True)
         finally:
-            logger.info("Bot class shutdown process initiating or completed.")
+            if self.application.updater and self.application.updater.running:  # Check if updater is running
+                await self.application.updater.stop()
+
+            logger.info("Bot class shutdown completed.")

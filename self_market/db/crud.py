@@ -23,10 +23,23 @@ async def get_user_by_telegram_id(db: AsyncSession, telegram_id: int, load_listi
     result = await db.execute(stmt);
     return result.scalar_one_or_none()
 
+
+async def get_all_db_admin_users(db: AsyncSession) -> list[models.User]:
+    """Fetches all users currently marked as admin in the database."""
+    stmt = select(models.User).filter(models.User.is_admin == True)
+    result = await db.execute(stmt)
+    users = result.scalars().all()
+    logger.info(f"Fetched {len(users)} users currently marked as admin from DB.")
+    return users
+
 async def get_user_details_for_admin(db: AsyncSession, target_user_telegram_id: int) -> models.User | None:
-    """Fetches a user by their Telegram ID for admin viewing."""
-    # Could be the same as get_user_by_telegram_id, or load more relations if needed
-    return await get_user_by_telegram_id(db, target_user_telegram_id)
+    """
+    Fetches a user by their Telegram ID for admin viewing, including their listings and purchases.
+    """
+    logger.debug(f"Admin fetching details for user {target_user_telegram_id}")
+    # Using get_user_by_telegram_id with load_listings=True to get comprehensive details
+    return await get_user_by_telegram_id(db, target_user_telegram_id, load_listings=True)
+
 
 async def get_or_create_user(db: AsyncSession, telegram_user: TelegramUser) -> models.User:
     """Gets an existing user or creates a new one if they don't exist."""
@@ -73,17 +86,67 @@ async def set_user_admin_state(db: AsyncSession, user_telegram_id: int, is_admin
     return None
 
 
+async def admin_get_all_users(db: AsyncSession, page: int = 0, page_size: int = 10) -> tuple[list[models.User], int]:
+    """
+    Fetches all users, paginated. For admin use.
+    Returns a list of user objects and the total count of users.
+    """
+    logger.debug(f"Admin fetching all users, page {page}, page_size {page_size}")
+    offset = page * page_size
+
+    # Query for total count
+    count_stmt = select(func.count(models.User.id)).select_from(models.User)
+    count_result = await db.execute(count_stmt)
+    total_count = count_result.scalar_one_or_none() or 0
+
+    if total_count == 0:
+        return [], 0
+
+    # Query for the page data, ordering by ID for consistent pagination
+    stmt = select(models.User).order_by(models.User.id).offset(offset).limit(page_size)
+    result = await db.execute(stmt)
+    users = result.scalars().all()
+    logger.info(f"Admin fetched {len(users)} users for page {page}. Total users: {total_count}")
+    return users, total_count
+
+
+async def admin_delete_listing(db: AsyncSession, listing_id: int) -> bool:
+    """
+    Deletes a listing by its ID. For admin use.
+    This is a hard delete.
+    Returns True if deleted, False otherwise.
+    """
+    logger.info(f"Admin attempting to delete listing {listing_id}")
+    listing = await db.get(models.Listing, listing_id) # Efficient way to get by PK
+
+    if not listing:
+        logger.warning(f"Admin delete failed: Listing {listing_id} not found.")
+        return False
+
+    try:
+        await db.delete(listing)
+        await db.commit()
+        logger.info(f"Admin successfully deleted listing {listing_id}.")
+        return True
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"DB error during admin deletion of listing {listing_id}: {e}", exc_info=True)
+        return False
+
 async def set_user_active_status(db: AsyncSession, user_telegram_id: int, is_active: bool) -> models.User | None:
-    """Sets the active status for a user."""
+    """Sets the active status for a user (enable/disable)."""
     user = await get_user_by_telegram_id(db, telegram_id=user_telegram_id)
     if user:
+        if user.is_active == is_active: # No change needed
+            logger.info(f"Active status for user {user_telegram_id} is already {is_active}. No action taken.")
+            return user
         user.is_active = is_active
         db.add(user)
         await db.commit()
         await db.refresh(user)
         logger.info(f"Set active status for user {user_telegram_id} to {is_active}")
         return user
-    logger.warning(f"User {user_telegram_id} not found to set admin status.")
+    logger.warning(f"User {user_telegram_id} not found to set active status.")
     return None
 
 
@@ -115,36 +178,44 @@ async def get_meal_by_id(db: AsyncSession, meal_id: int) -> models.Meal | None:
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
-async def get_all_meals(db: AsyncSession, only_active: bool = False) -> list[models.Meal]:
-    """Fetches all meals, optionally only active ones."""
+async def get_all_meals(db: AsyncSession) -> list[models.Meal]:
+    """
+    Fetches all meals.
+    Note: The provided Meal model does not have an `is_active` field.
+    If it were added, `only_active=True` logic could be re-inserted here.
+    """
     stmt = select(models.Meal).order_by(models.Meal.date.desc(), models.Meal.description)
-    if only_active:
-        stmt = stmt.where(models.Meal.is_active == True)
     result = await db.execute(stmt)
     return result.scalars().all()
 
 
 async def delete_meal(db: AsyncSession, meal_id: int) -> bool:
-    """Deletes a meal by its ID. Returns True if deleted, False otherwise."""
-    # Check if meal is used in any listings first to prevent foreign key issues
-    # For simplicity, we'll just try to delete. Add checks if needed.
+    """
+    Deletes a meal by its ID.
+    Prevents deletion if the meal is referenced by any existing listings.
+    Returns True if deleted, False otherwise.
+    """
     meal = await get_meal_by_id(db, meal_id)
-    if meal:
-        # Check for associated listings. If any, prevent deletion or handle accordingly.
-        # For now, we assume it's okay to delete or that listings would be cascade deleted/nulled.
-        # A safer approach is to mark as inactive:
-        # meal.is_active = False
-        # db.add(meal)
-        # await db.commit()
-        # logger.info(f"Marked meal {meal_id} as inactive.")
-        # return True
-        # For actual deletion:
+    if not meal:
+        logger.warning(f"Meal {meal_id} not found for deletion.")
+        return False
+
+    # Check if the meal is used in any listings
+    stmt_listings = select(models.Listing.id).filter(models.Listing.meal_id == meal_id).limit(1)
+    result_listings = await db.execute(stmt_listings)
+    if result_listings.scalar_one_or_none():
+        logger.warning(f"Cannot delete meal {meal_id} as it is referenced by existing listings. Consider deactivating listings first or marking meal as inactive (if model supported).")
+        return False
+
+    try:
         await db.delete(meal)
         await db.commit()
         logger.info(f"Deleted meal {meal_id}")
         return True
-    logger.warning(f"Meal {meal_id} not found for deletion.")
-    return False
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error deleting meal {meal_id}: {e}", exc_info=True)
+        return False
 
 async def update_user_verification(
     db: AsyncSession,

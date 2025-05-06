@@ -8,6 +8,7 @@ from .buying import *
 from .listings import *
 from .settings import *
 from .history import *
+from .admin import *
 
 # Explicitly define what gets imported with "from handlers import *"
 # This is good practice and helps tools understand the package structure.
@@ -51,6 +52,18 @@ __all__ = [
 
     # History Handlers
     'handle_history', 'handle_history_view', 'handle_history_back_select',
+
+# --- Admin Handlers --- <--- ADD THIS SECTION
+    'set_admin_status', 'set_active_status', 'get_user_info',
+    'list_users_command', 'list_users_callback', 'admin_noop_callback', # Added admin_noop_callback
+    'add_meal_conv_handler', # Add the conversation handler itself
+    'delete_meal_command', 'delete_listing_command',
+    # Add conversation states for admin if they need to be globally accessible for some reason, usually not.
+    # 'ADDMEAL_ASK_DESCRIPTION', 'ADDMEAL_ASK_TYPE', etc.
+    # Add callback data constants for admin if needed globally
+    'CALLBACK_ADMIN_LIST_USERS_PAGE',
+    # 'CALLBACK_ADMIN_MEAL_CONFIRM_YES', 'CALLBACK_ADMIN_MEAL_CONFIRM_NO', # These are used within admin.py
+
 
     # Optional Fallback Handlers
     'echo', 'unexpected_message_handler',
