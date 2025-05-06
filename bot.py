@@ -96,7 +96,7 @@ class TelegramBot:
             # "My Listing" button
             self.application.add_handler(
                 MessageHandler(filters.Regex(f'^{re.escape(handlers.BTN_MY_LISTINGS)}$') & (~filters.COMMAND),
-                               handlers.handle_my_listings), group=1)  # ADD THIS
+                               handlers.handle_my_listings), group=1)
 
             self.application.add_handler(
                 MessageHandler(filters.Regex(f'^{re.escape(handlers.BTN_SETTINGS)}$') & (~filters.COMMAND),
@@ -104,9 +104,13 @@ class TelegramBot:
 
             self.application.add_handler(
                 MessageHandler(filters.Regex(f'^{re.escape(handlers.BTN_HISTORY)}$') & (~filters.COMMAND),
-                               handlers.handle_history), group=1)  # ADD THIS
+                               handlers.handle_history), group=1)
 
             # Callback Query Handler (for potential Inline Keyboards)
+            self.application.add_handler(CallbackQueryHandler(
+                handlers.handle_buy_refresh, pattern=f'^{handlers.CALLBACK_BUY_REFRESH}$'
+            ), group=1)
+
             # Initial Buy Button press
             self.application.add_handler(CallbackQueryHandler(
                 handlers.handle_purchase_button, pattern=r'^buy_listing_\d+$'
