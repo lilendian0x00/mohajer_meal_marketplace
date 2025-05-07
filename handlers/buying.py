@@ -52,7 +52,8 @@ async def _generate_buy_food_response(db_session: crud.AsyncSession) -> tuple[st
             meal_type_raw = meal.meal_type or meal_type_raw
             if meal.date:
                 try:
-                    meal_date_str_raw = meal.date.strftime('%Y-%m-%d')
+                    #meal_date_str_raw = meal.date.strftime('%Y-%m-%d')
+                    meal_date_str_raw = utility.format_gregorian_date_to_shamsi(meal.date)
                 except AttributeError:
                     meal_date_str_raw = str(meal.date)  # Fallback if strftime fails or date is already string
 
@@ -254,7 +255,8 @@ async def handle_purchase_button(update: Update, context: ContextTypes.DEFAULT_T
             meal_type_raw = meal.meal_type or meal_type_raw
             if meal.date:
                 try:
-                    meal_date_str_raw = meal.date.strftime('%Y-%m-%d')
+                    # meal_date_str_raw = meal.date.strftime('%Y-%m-%d')
+                    meal_date_str_raw = utility.format_gregorian_date_to_shamsi(meal.date)
                 except AttributeError:
                     meal_date_str_raw = str(meal.date)
 
@@ -274,7 +276,7 @@ async def handle_purchase_button(update: Update, context: ContextTypes.DEFAULT_T
             "⚠️ *تایید خرید* ⚠️\n\n"
             f"شما در حال خرید:\n"
             # Escaped literal parentheses here:
-            f"🍽️ _{meal_desc}_ \\({meal_type} \\- {meal_date_str}\\)\n"
+            f"🍽️ *{meal_desc}* \\({meal_type} \\- {meal_date_str}\\)\n"
             f"👤 از فروشنده: {seller_name}\n"
             f"💰 به قیمت: {price_str} تومان\n"
             f"🆔 شماره آگهی: `{listing_id_str}`\n\n"

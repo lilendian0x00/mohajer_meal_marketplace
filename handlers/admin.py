@@ -1,8 +1,9 @@
 import logging
 from functools import wraps
 from decimal import Decimal, InvalidOperation
-from datetime import date as DateObject # Alias to avoid conflict with datetime.date
+from datetime import date as GregorianDate # Alias to avoid conflict with datetime.date
 from datetime import datetime
+import jdatetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ContextTypes,
@@ -17,7 +18,7 @@ from config import ADMIN_TELEGRAM_IDS, HISTORY_PAGE_SIZE # Using HISTORY_PAGE_SI
 from self_market.db.session import get_db_session
 from self_market.db import crud
 from self_market import models
-from utility import escape_markdown_v2
+from utility import escape_markdown_v2, format_gregorian_date_to_shamsi
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,10 @@ def admin_required(func):
 CALLBACK_ADMIN_LIST_USERS_PAGE = "admin_users_page_"
 CALLBACK_ADMIN_MEAL_CONFIRM_YES = "admin_meal_conf_yes"
 CALLBACK_ADMIN_MEAL_CONFIRM_NO = "admin_meal_conf_no"
+# Callback data for meal type selection
+CALLBACK_ADDMEAL_TYPE_PREFIX = "addmeal_type_"
+CALLBACK_ADDMEAL_TYPE_NAHAR = f"{CALLBACK_ADDMEAL_TYPE_PREFIX}ناهار" # Lunch
+CALLBACK_ADDMEAL_TYPE_SHAM = f"{CALLBACK_ADDMEAL_TYPE_PREFIX}شام"   # Dinner
 
 # User Management Handlers
 @admin_required
@@ -131,6 +136,10 @@ async def get_user_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             #     credit_card_display = f"`{escape_markdown_v2(raw_card)}` \\(کوتاه\\)"
             credit_card_display = f"`{escape_markdown_v2(user.credit_card_number)}`"
 
+        # Convert created_at to Shamsi for display
+        created_at_shamsi = format_gregorian_date_to_shamsi(user.created_at)
+        # Get time part separately if needed (Shamsi conversion only done for date part)
+        time_str = user.created_at.strftime('%H:%M') if user.created_at else ""
 
         user_info_parts = [
             f"*اطلاعات کاربر: {user.telegram_id}*",
@@ -140,11 +149,11 @@ async def get_user_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"شماره دانشجویی: `{escape_markdown_v2(user.education_number)}`" if user.education_number else "شماره دانشجویی: ثبت نشده",
             f"شماره ملی: `{escape_markdown_v2(user.identity_number)}`" if user.identity_number else "شماره ملی: ثبت نشده",
             f"شماره تماس: `{escape_markdown_v2(user.phone_number)}`" if user.phone_number else "شماره تماس: ثبت نشده",
-            f"شماره کارت: {credit_card_display}", # credit_card_display is now formatted with backticks
+            f"شماره کارت: {credit_card_display}",
             f"تایید شده: {'✅' if user.is_verified else '❌'}",
             f"ادمین: {'✅' if user.is_admin else '❌'}",
             f"فعال: {'✅' if user.is_active else '❌'}",
-            f"تاریخ عضویت: {escape_markdown_v2(user.created_at.strftime('%Y-%m-%d %H:%M')) if user.created_at else 'نامشخص'}",
+            f"تاریخ عضویت: {created_at_shamsi} {escape_markdown_v2(time_str)}",
             f"تعداد آگهی‌های فروش: {len(user.listings) if user.listings else 0}",
             f"تعداد خریدها: {len(user.purchases) if user.purchases else 0}",
         ]
@@ -240,30 +249,65 @@ async def add_meal_receive_description(update: Update, context: ContextTypes.DEF
         await update.message.reply_text("توضیحات نمی‌تواند خالی باشد. لطفا مجددا وارد کنید:")
         return ADDMEAL_ASK_DESCRIPTION
     context.user_data['addmeal_description'] = description
-    await update.message.reply_text("۲. نوع غذا را وارد کنید (مثال: lunch, dinner):")
+
+    # Create InlineKeyboard for meal type selection
+    keyboard = [
+        [
+            InlineKeyboardButton("ناهار 🍚", callback_data=CALLBACK_ADDMEAL_TYPE_NAHAR),
+            InlineKeyboardButton("شام 🌙", callback_data=CALLBACK_ADDMEAL_TYPE_SHAM),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("۲\\. نوع غذا را انتخاب کنید:", reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
     return ADDMEAL_ASK_TYPE
 
-async def add_meal_receive_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    meal_type = update.message.text.strip().lower()
-    if not meal_type: # Basic validation
-        await update.message.reply_text("نوع غذا نمی‌تواند خالی باشد. لطفا مجددا وارد کنید:")
-        return ADDMEAL_ASK_TYPE
+
+async def add_meal_receive_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+
+    # Extract meal type from callback data
+    # e.g., "addmeal_type_ناهار" -> "ناهار"
+    meal_type = query.data.split(CALLBACK_ADDMEAL_TYPE_PREFIX)[1]
+
+    if not meal_type:
+        await query.edit_message_text("خطا در انتخاب نوع غذا. لطفا دوباره تلاش کنید.")
+        return ConversationHandler.END  # Or return to a previous state if appropriate
+
     context.user_data['addmeal_type'] = meal_type
-    await update.message.reply_text("۳. تاریخ غذا را وارد کنید \\(فرمت YYYY-MM-DD مثال: 2025-12-31\\):", parse_mode=ParseMode.MARKDOWN_V2) # Escaped parentheses
+    logger.info(f"Admin selected meal type: {meal_type} for meal {context.user_data.get('addmeal_description')}")
+
+    # Edit the message to remove buttons and ask for the next step
+    await query.edit_message_text(
+        f"نوع غذا انتخاب شد: *{escape_markdown_v2(meal_type)}*\n\n"
+        "۳\\. تاریخ شمسی غذا را وارد کنید \\(فرمت ۱۴۰۴/۰۲/۱۸\\):",
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
     return ADDMEAL_ASK_DATE
 
 async def add_meal_receive_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     date_str = update.message.text.strip()
     try:
-        meal_date = DateObject.fromisoformat(date_str)
-        if meal_date < DateObject.today() : # check if date is in past
-             await update.message.reply_text("تاریخ غذا نمی‌تواند در گذشته باشد. لطفا تاریخ معتبری وارد کنید \\(YYYY-MM-DD\\):", parse_mode=ParseMode.MARKDOWN_V2) # Escaped parentheses
-             return ADDMEAL_ASK_DATE
-        context.user_data['addmeal_date'] = meal_date
-        await update.message.reply_text("۴. قیمت اصلی غذا \\(دانشگاه\\) به تومان را وارد کنید \\(عدد\\):", parse_mode=ParseMode.MARKDOWN_V2) # Escaped parentheses
+        # Use jdatetime.datetime.strptime to handle potential time component then get date
+        j_date = jdatetime.datetime.strptime(date_str, '%Y/%m/%d').date()
+
+        # Basic validation: Check if date is in the past (using jdatetime)
+        if j_date < jdatetime.date.today():
+            await update.message.reply_text(
+                "تاریخ غذا نمی‌تواند در گذشته باشد\\. لطفا تاریخ شمسی معتبری وارد کنید \\(YYYY/MM/DD\\):",
+                parse_mode=ParseMode.MARKDOWN_V2)
+            return ADDMEAL_ASK_DATE
+
+        # Convert to Gregorian for storage
+        gregorian_date = j_date.togregorian()
+        context.user_data['addmeal_date'] = gregorian_date  # Store Gregorian date object
+        logger.info(f"Received Shamsi date {date_str}, stored as Gregorian {gregorian_date}")
+
+        await update.message.reply_text("۴\\. قیمت اصلی غذا \\(دانشگاه\\) به تومان را وارد کنید \\(عدد\\):",
+                                        parse_mode=ParseMode.MARKDOWN_V2)
         return ADDMEAL_ASK_PRICE
     except ValueError:
-        await update.message.reply_text("فرمت تاریخ نامعتبر است. لطفا مجددا وارد کنید \\(YYYY-MM-DD\\):", parse_mode=ParseMode.MARKDOWN_V2) # Escaped parentheses
+        await update.message.reply_text("فرمت تاریخ شمسی نامعتبر است\\. لطفا مجددا وارد کنید \\(YYYY/MM/DD\\):", parse_mode=ParseMode.MARKDOWN_V2)
         return ADDMEAL_ASK_DATE
 
 
@@ -274,10 +318,12 @@ async def add_meal_receive_price(update: Update, context: ContextTypes.DEFAULT_T
         if price <= 0:
             raise ValueError("قیمت باید مثبت باشد.")
         context.user_data['addmeal_price'] = price
-        await update.message.reply_text("۵. حداکثر قیمت مجاز فروش \\(به تومان\\) را وارد کنید \\(عدد\\). اگر محدودیت ندارد، '0' یا 'skip' را وارد کنید:", parse_mode=ParseMode.MARKDOWN_V2) # Escaped parentheses
+        await update.message.reply_text(
+            "۵\\. حداکثر قیمت مجاز فروش \\(به تومان\\) را وارد کنید \\(عدد\\)\\. اگر محدودیت ندارد، '0' یا 'skip' را وارد کنید:",
+            parse_mode=ParseMode.MARKDOWN_V2)
         return ADDMEAL_ASK_PRICELIMIT
     except (InvalidOperation, ValueError) as e:
-        await update.message.reply_text(f"قیمت نامعتبر: {escape_markdown_v2(str(e))}. لطفا فقط عدد مثبت وارد کنید:")
+        await update.message.reply_text(f"قیمت نامعتبر: {escape_markdown_v2(str(e))}\\. لطفا فقط عدد مثبت وارد کنید:")
         return ADDMEAL_ASK_PRICE
 
 async def add_meal_receive_price_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -293,7 +339,7 @@ async def add_meal_receive_price_limit(update: Update, context: ContextTypes.DEF
             else:
                 price_limit = price_limit_decimal
         except (InvalidOperation, ValueError) as e:
-            await update.message.reply_text(f"حداکثر قیمت نامعتبر: {escape_markdown_v2(str(e))}. لطفا عدد مثبت، '0' یا 'skip' وارد کنید:")
+            await update.message.reply_text(f"حداکثر قیمت نامعتبر: {escape_markdown_v2(str(e))}\\. لطفا عدد مثبت، '0' یا 'skip' وارد کنید:")
             return ADDMEAL_ASK_PRICELIMIT
     elif price_limit_str == '0': # Explicitly handle '0' string as no limit
         price_limit = None
@@ -304,7 +350,8 @@ async def add_meal_receive_price_limit(update: Update, context: ContextTypes.DEF
     # Confirmation
     desc = context.user_data['addmeal_description']
     mtype = context.user_data['addmeal_type']
-    mdate = context.user_data['addmeal_date'].isoformat()
+    gregorian_date = context.user_data['addmeal_date']
+    mdate_shamsi = format_gregorian_date_to_shamsi(gregorian_date)  # Convert for display
     mprice = context.user_data['addmeal_price']
     mplimit_val = context.user_data['addmeal_price_limit']
 
@@ -312,14 +359,13 @@ async def add_meal_receive_price_limit(update: Update, context: ContextTypes.DEF
     if isinstance(mplimit_val, Decimal):
         mplimit_display = f"`{mplimit_val:,.0f} تومان`"
 
-
     text = (
         f"*تایید اطلاعات غذا:*\n"
         f"توضیحات: {escape_markdown_v2(desc)}\n"
         f"نوع: {escape_markdown_v2(mtype)}\n"
-        f"تاریخ: `{mdate}`\n"
+        f"تاریخ: `{mdate_shamsi}`\n"
         f"قیمت اصلی: `{mprice:,.0f}` تومان\n"
-        f"حداکثر قیمت فروش: {mplimit_display}\n" # mplimit_display is already formatted or "ندارد"
+        f"حداکثر قیمت فروش: {mplimit_display}\n"
         f"\nآیا این غذا به سیستم اضافه شود؟"
     )
     keyboard = [
@@ -347,7 +393,7 @@ async def add_meal_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     price_limit = context.user_data.get('addmeal_price_limit')
 
     if not all([description, meal_type, meal_date, price is not None]):
-        await query.edit_message_text("خطا: اطلاعات ناقص است. لطفا دوباره با /addmeal شروع کنید.")
+        await query.edit_message_text("خطا: اطلاعات ناقص است\\. لطفا دوباره با /addmeal شروع کنید\\.")
         context.user_data.clear()
         return ConversationHandler.END
 
@@ -432,10 +478,10 @@ async def delete_listing_command(update: Update, context: ContextTypes.DEFAULT_T
 
 # Conversation Handler for /addmeal
 add_meal_conv_handler = ConversationHandler(
-    entry_points=[CommandHandler("addmeal", add_meal_start)], # admin_required is on add_meal_start
+    entry_points=[CommandHandler("addmeal", add_meal_start)],
     states={
         ADDMEAL_ASK_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_meal_receive_description)],
-        ADDMEAL_ASK_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_meal_receive_type)],
+        ADDMEAL_ASK_TYPE: [CallbackQueryHandler(add_meal_receive_type_callback, pattern=f"^{CALLBACK_ADDMEAL_TYPE_PREFIX}(ناهار|شام)$")],
         ADDMEAL_ASK_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_meal_receive_date)],
         ADDMEAL_ASK_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_meal_receive_price)],
         ADDMEAL_ASK_PRICELIMIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_meal_receive_price_limit)],
@@ -443,6 +489,6 @@ add_meal_conv_handler = ConversationHandler(
     },
     fallbacks=[
         CommandHandler("cancel", add_meal_cancel),
-        ],
-    conversation_timeout=600, # 10 minutes
+    ],
+    conversation_timeout=600,
 )

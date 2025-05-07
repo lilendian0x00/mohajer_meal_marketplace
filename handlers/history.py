@@ -4,6 +4,8 @@ import math
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
+
+from utility import format_gregorian_date_to_shamsi, escape_markdown_v2
 from .common import (
     MAIN_MENU_BUTTON_TEXTS
 )
@@ -115,21 +117,31 @@ async def handle_history_view(update: Update, context: ContextTypes.DEFAULT_TYPE
             if listing.meal:
                 meal_desc = listing.meal.description or meal_desc
                 if listing.meal.date:
-                    try: meal_date_str = listing.meal.date.strftime('%Y-%m-%d')
-                    except AttributeError: meal_date_str = str(listing.meal.date)
+                    try:
+                        event_datetime_obj = listing.meal.date
+                        event_date_shamsi = format_gregorian_date_to_shamsi(event_datetime_obj)
+                        event_time_str = event_datetime_obj.strftime('%H:%M') if event_datetime_obj else ""
+                        meal_date_str = f"{event_date_shamsi} {event_time_str}".strip()
+                    except AttributeError:
+                        meal_date_str = str(listing.meal.date)
 
             price_str = f"{listing.price:,.0f}" if listing.price is not None else "نامشخص"
             event_date_str = "نامشخص"
             if listing.sold_at:
-                try: event_date_str = listing.sold_at.strftime('%Y-%m-%d %H:%M')
-                except AttributeError: event_date_str = str(listing.sold_at)
+                try:
+                    event_datetime_obj = listing.sold_at
+                    event_date_shamsi = format_gregorian_date_to_shamsi(event_datetime_obj)
+                    event_time_str = event_datetime_obj.strftime('%H:%M') if event_datetime_obj else ""
+                    event_date_str = f"{event_date_shamsi} {event_time_str}".strip()
+                except AttributeError:
+                    event_date_str = str(listing.sold_at)
 
             part = ""
             if history_type == 'purchases':
                 seller_info = f"@{listing.seller.username}" if listing.seller and listing.seller.username else (listing.seller.first_name if listing.seller else "ناشناس")
                 part = (
                     f"🗓️ تاریخ خرید: {event_date_str}\n"
-                    f"🍽️ غذا: {meal_desc} ({meal_date_str})\n"
+                    f"🍽️ غذا: {escape_markdown_v2(meal_desc)} ({escape_markdown_v2(meal_date_str)})\n"
                     f"💰 قیمت: {price_str} تومان\n"
                     f"👤 فروشنده: {seller_info}\n"
                     f"🔢 کد آگهی: `{listing.id}`\n"
@@ -138,8 +150,8 @@ async def handle_history_view(update: Update, context: ContextTypes.DEFAULT_TYPE
             elif history_type == 'sales':
                 buyer_info = f"@{listing.buyer.username}" if listing.buyer and listing.buyer.username else (listing.buyer.first_name if listing.buyer else "ناشناس")
                 part = (
-                    f"🗓️ تاریخ فروش: {event_date_str}\n"
-                    f"🍽️ غذا: {meal_desc} ({meal_date_str})\n"
+                    f"🗓️ تاریخ فروش: {escape_markdown_v2(event_date_str)}\n"
+                    f"🍽️ غذا: {escape_markdown_v2(meal_desc)} ({escape_markdown_v2(meal_date_str)})\n"
                     f"💰 قیمت: {price_str} تومان\n"
                     f"👤 خریدار: {buyer_info}\n"
                     f"🔢 کد آگهی: `{listing.id}`\n"

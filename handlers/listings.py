@@ -3,6 +3,8 @@ import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
+
+from utility import format_gregorian_date_to_shamsi
 from .common import CALLBACK_SETTINGS_BACK_MAIN # For back button
 from self_market.db.session import get_db_session
 from self_market.db import crud
@@ -58,8 +60,11 @@ async def handle_my_listings(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if listing.meal:
             meal_desc = listing.meal.description or meal_desc
             if listing.meal.date:
-                try: meal_date_str = listing.meal.date.strftime('%Y-%m-%d')
-                except AttributeError: meal_date_str = str(listing.meal.date)
+                try:
+                    # meal_date_str = listing.meal.date.strftime('%Y-%m-%d')
+                    meal_date_str = format_gregorian_date_to_shamsi(listing.meal.date)
+                except AttributeError:
+                    meal_date_str = str(listing.meal.date)
 
         price_str = f"{listing.price:,.0f}" if listing.price is not None else "نامشخص"
         status_text = status_map.get(listing.status, listing.status.value) # Get friendly status text

@@ -44,23 +44,23 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 # Using specific dates for example, adjust as needed
 SEED_MEALS: List[Dict[str, Any]] = [
     {
-        "date": date(2025, 5, 15), "meal_type": "lunch",
+        "date": date(2025, 5, 15), "meal_type": "ناهار",
         "description": "عدس پلو با گوشت", "price": 12000.0, "price_limit": 20000.0
     },
     {
-        "date": date(2025, 5, 15), "meal_type": "lunch",
+        "date": date(2025, 5, 15), "meal_type": "ناهار",
         "description": "چلو کباب کوبیده", "price": 15000.0, "price_limit": 25000.0
      },
     {
-        "date": date(2025, 5, 16), "meal_type": "lunch",
+        "date": date(2025, 5, 16), "meal_type": "ناهار",
         "description": "چلو خورشت قورمه سبزی", "price": 12000.0, "price_limit": 25000.0
     },
     {
-        "date": date(2025, 5, 16), "meal_type": "lunch",
+        "date": date(2025, 5, 16), "meal_type": "ناهار",
         "description": "کلم پلو با گوشت", "price": 12000.0, "price_limit": 23000.0
     },
     {
-        "date": date(2025, 5, 16), "meal_type": "lunch",
+        "date": date(2025, 5, 16), "meal_type": "ناهار",
         "description": "چلو جوجه کباب بدون استخوان", "price": 15000.0, "price_limit": 25000.0
     },
 ]

@@ -1,15 +1,98 @@
+import html
 import logging
 import asyncio
 import re
+import traceback
 
 from telegram import Update
+from telegram.constants import ParseMode
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ConversationHandler
+    Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ConversationHandler, ContextTypes,
+    PicklePersistence
 )
+
+import config
 import handlers # Bot Handlers
 
-
 logger = logging.getLogger(__name__)
+
+# --- Global Error Handler ---
+async def ptb_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Log Errors caused by Updates and send detailed message to admin users.
+    """
+    # Log the error before we do anything else
+    logger.error(f"PTB Exception while handling an update:", exc_info=context.error)
+
+    # Optionally ignore common errors like MessageNotModified if desired
+    # if isinstance(context.error, telegram.error.BadRequest) and \
+    #    context.error.message == "Message is not modified":
+    #     logger.info("Ignoring MessageNotModified error.")
+    #     return
+
+    # Prepare traceback
+    tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+    tb_string = "".join(tb_list)
+
+    # Get update type and user info (if available)
+    update_type = "N/A"
+    user_info = "N/A"
+    chat_info = "N/A"
+    effective_update = None
+
+    if isinstance(update, Update):
+        effective_update = update
+        update_type = update.__class__.__name__
+        if update.effective_user:
+            user = update.effective_user
+            user_info = f"ID: {user.id}"
+            if user.username: user_info += f" | @{user.username}"
+            if user.first_name: user_info += f" | Name: {user.first_name}"
+        if update.effective_chat:
+            chat_info = f"ID: {update.effective_chat.id}"
+            if update.effective_chat.title: chat_info += f" | Title: {update.effective_chat.title}"
+            if update.effective_chat.username: chat_info += f" | @{update.effective_chat.username}"
+            if update.effective_chat.type: chat_info += f" | Type: {update.effective_chat.type}"
+
+    # Format the message for admins using HTML
+    # Escape everything going into the message
+    escaped_error_str = html.escape(str(context.error))
+    escaped_update_type = html.escape(update_type)
+    escaped_user_info = html.escape(user_info)
+    escaped_chat_info = html.escape(chat_info)
+
+    # Limit traceback length to avoid hitting Telegram message limits (4096 chars)
+    # Leave space for other text (~300-400 chars)
+    max_tb_length = 3600
+    escaped_traceback_snippet = html.escape(tb_string[-max_tb_length:])
+    if len(tb_string) > max_tb_length:
+        escaped_traceback_snippet = "...\n" + escaped_traceback_snippet # Indicate truncation
+
+    message = (
+        f"<b>⚠ BOT ERROR ENCOUNTERED ⚠</b>\n\n"
+        f"<b>Error:</b>\n<pre>{escaped_error_str}</pre>\n\n"
+        f"<b>Update Type:</b> {escaped_update_type}\n"
+        f"<b>User:</b> {escaped_user_info}\n"
+        f"<b>Chat:</b> {escaped_chat_info}\n\n"
+        f"<b>Traceback (last {max_tb_length} chars):</b>\n<pre>{escaped_traceback_snippet}</pre>"
+    )
+
+    # Send message to all admins configured in config.py
+    if config.ADMIN_TELEGRAM_IDS:
+        for admin_id in config.ADMIN_TELEGRAM_IDS:
+            try:
+                # Use context.bot to send the message
+                await context.bot.send_message(
+                    chat_id=admin_id, text=message, parse_mode=ParseMode.HTML
+                )
+                logger.debug(f"Sent error notification to admin {admin_id}")
+            except Exception as e_notify:
+                # Log failure to notify admin, but don't raise further errors
+                logger.error(f"Failed to send error notification to admin {admin_id}: {e_notify}")
+    else:
+        logger.warning("ADMIN_TELEGRAM_IDS list is empty in config. Cannot send error notifications.")
+
+
 
 class TelegramBot:
     """Encapsulates the Telegram Bot Application and its execution."""
@@ -21,7 +104,16 @@ class TelegramBot:
         logger.info("Initializing Telegram Bot Class...")
         self.token = token
         builder = Application.builder().token(self.token)
+
+        persistence = PicklePersistence(filepath="bot_persistence")
+        builder.persistence(persistence)
+
         self.application = builder.build()
+
+        # Register the global error handler
+        self.application.add_error_handler(ptb_error_handler)
+
+        logger.info("Custom global error handler registered.")
         self._register_handlers()
 
     def _register_handlers(self) -> None:
@@ -216,7 +308,12 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Error during bot execution: {e}", exc_info=True)
         finally:
-            if self.application.updater and self.application.updater.running:  # Check if updater is running
+            logger.info("Bot class's run method finally block executing.")
+            # Check if updater exists and is running before trying to stop it
+            if hasattr(self.application,
+                       'updater') and self.application.updater and self.application.updater.is_running:
+                logger.info("Stopping PTB updater...")
                 await self.application.updater.stop()
-
-            logger.info("Bot class shutdown completed.")
+                logger.info("PTB updater stopped.")
+            # The `async with self.application` block handles application shutdown
+            logger.info("Bot class run method finished.")

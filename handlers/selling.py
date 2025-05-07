@@ -4,6 +4,8 @@ from decimal import Decimal, InvalidOperation
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
+
+from utility import escape_markdown_v2, format_gregorian_date_to_shamsi
 from .common import (
     SELL_ASK_CODE, SELL_ASK_MEAL, SELL_ASK_PRICE, SELL_CONFIRM,
     CALLBACK_CANCEL_SELL_FLOW, get_main_menu_keyboard,
@@ -90,8 +92,11 @@ async def receive_reservation_code(update: Update, context: ContextTypes.DEFAULT
             code_exists = await crud.check_listing_exists_by_code(db_session, reservation_code)
             if code_exists:
                 logger.warning(f"User {user.id} tried to list code '{reservation_code}' which already exists.")
-                await message.reply_text("این کد رزرو قبلا برای فروش ثبت شده است.")
-                return ConversationHandler.END
+                await message.reply_text("این کد رزرو قبلا برای فروش ثبت شده است یا در حال حاضر در وضعیت فروش قرار دارد.")
+                # Clear context data if any was set for this flow before erroring out
+                if 'university_reservation_code' in context.user_data:
+                    del context.user_data['university_reservation_code']
+                return ConversationHandler.END  # End conversation if code exists
 
             # Fetch available Meals for selection
             available_meals = await crud.get_meals_for_selling(db_session)  # TODO: Maybe filter by date?
@@ -102,28 +107,68 @@ async def receive_reservation_code(update: Update, context: ContextTypes.DEFAULT
 
             # Store code and prepare meal selection buttons
             context.user_data['university_reservation_code'] = reservation_code
-            meal_buttons = []
-            # Group buttons, e.g., 2 per row
-            button_row = []
-            for meal in available_meals:
-                button_text = f"{meal.description} ({meal.meal_type} - {meal.date.strftime('%Y-%m-%d')})"
-                callback_data = f"sell_select_meal_{meal.id}"
-                button_row.append(InlineKeyboardButton(button_text, callback_data=callback_data))
-                if len(button_row) == 2:  # Max 2 buttons per row
-                    meal_buttons.append(button_row)
-                    button_row = []
-            if button_row:  # Add remaining button(s) if odd number
-                meal_buttons.append(button_row)
 
-            meal_buttons.append([InlineKeyboardButton("❌ لغو", callback_data=CALLBACK_CANCEL_SELL_FLOW)])
+            # Main instruction text, escaped
+            instruction_text = escape_markdown_v2(
+                "لطفا نوع غذای مربوط به این کد را از لیست زیر انتخاب کنید:")
+            message_parts = [instruction_text, "\n"]  # Add a newline after instruction
 
-            if not available_meals: # Check if available_meals was empty before adding cancel
-                await message.reply_text("خطا در ساخت دکمه‌های انتخاب غذا.")
-                return ConversationHandler.END
+            meal_details_for_text_md = []
+            for index, meal in enumerate(available_meals):
+                # meal_date_str = meal.date.strftime('%Y-%m-%d') if meal.date else "نامشخص"
+                meal_date_str = format_gregorian_date_to_shamsi(meal.date)
+                # Assuming meal.meal_type is user-friendly (e.g., 'ناهار', 'شام').
+                # If it's 'lunch'/'dinner', you might want a mapping:
+                # persian_meal_type_map = {'lunch': 'ناهار', 'dinner': 'شام'}
+                # meal_type_display = persian_meal_type_map.get(meal.meal_type.lower(), meal.meal_type)
+                meal_type_display = meal.meal_type  # Use directly if already Persian
 
-            reply_markup = InlineKeyboardMarkup(meal_buttons)
-            await message.reply_text("کد معتبر است. لطفا نوع غذای مربوط به این کد را انتخاب کنید:",
-                                     reply_markup=reply_markup)
+                # Escape dynamic content from the meal object
+                escaped_description = escape_markdown_v2(meal.description or 'غذای نامشخص')
+                escaped_meal_type = escape_markdown_v2(meal_type_display)
+                escaped_meal_date = escape_markdown_v2(meal_date_str)
+
+                # Format: "1\. Escaped Description \(Escaped Type \- Escaped Date\)"
+                # The number, dot, and space make it a list item. Escape the dot.
+                meal_info = f"{index + 1}\\. {escaped_description} \\({escaped_meal_type} \\- {escaped_meal_date}\\)"
+                meal_details_for_text_md.append(meal_info)
+
+            message_parts.append("\n".join(meal_details_for_text_md))  # Each meal on a new line
+            final_message_text_md = "\n".join(message_parts)
+
+            # Build the inline keyboard
+            meal_buttons_rows = []
+            current_row = []
+            # Consider how many buttons fit well per row (e.g., 2 or 3)
+            # For "انتخاب گزینه X", 2 or 3 can work. Let's try 3 for potentially shorter rows overall.
+            max_buttons_per_row = 3
+
+            for index, meal in enumerate(available_meals):
+                # Shorter, referential button text in Persian
+                button_text = f"انتخاب گزینه {index + 1}"  # "Select option X"
+                callback_data = f"sell_select_meal_{meal.id}"  # Callback still uses meal_id
+                current_row.append(InlineKeyboardButton(button_text, callback_data=callback_data))
+
+                if len(current_row) == max_buttons_per_row:
+                    meal_buttons_rows.append(current_row)
+                    current_row = []
+
+            if current_row:  # Add any remaining buttons in the last row
+                meal_buttons_rows.append(current_row)
+
+            # Add the cancel button in its own row for clarity
+            # Using a more descriptive cancel text for this specific context
+            meal_buttons_rows.append(
+                [InlineKeyboardButton("❌ لغو مراحل فروش", callback_data=CALLBACK_CANCEL_SELL_FLOW)])
+
+            reply_markup = InlineKeyboardMarkup(meal_buttons_rows)
+
+            await message.reply_text(
+                final_message_text_md,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+
             return SELL_ASK_MEAL  # Move to state waiting for meal selection
 
     except Exception as e:

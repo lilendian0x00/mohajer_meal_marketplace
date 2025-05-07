@@ -53,7 +53,7 @@ __all__ = [
     # History Handlers
     'handle_history', 'handle_history_view', 'handle_history_back_select',
 
-# --- Admin Handlers --- <--- ADD THIS SECTION
+    # Admin Handlers
     'set_admin_status', 'set_active_status', 'get_user_info',
     'list_users_command', 'list_users_callback', 'admin_noop_callback', # Added admin_noop_callback
     'add_meal_conv_handler', # Add the conversation handler itself

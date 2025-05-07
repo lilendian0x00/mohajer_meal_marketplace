@@ -1,4 +1,9 @@
 import re
+from datetime import date as GregorianDate, datetime
+import jdatetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 def is_valid_iranian_national_id(national_id: str) -> bool:
     """
@@ -69,3 +74,18 @@ def escape_markdown_v2(text: str | None) -> str:
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     # Use re.sub to add a backslash before special characters
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
+
+
+def format_gregorian_date_to_shamsi(gregorian_date: GregorianDate | datetime | None) -> str:
+    """Converts Gregorian date/datetime to Shamsi YYYY/MM/DD string."""
+    if gregorian_date is None:
+        return "نامشخص"
+    # If it's a datetime object, get the date part
+    if isinstance(gregorian_date, datetime):
+        gregorian_date = gregorian_date.date()
+    try:
+        j_date = jdatetime.date.fromgregorian(date=gregorian_date)
+        return j_date.strftime('%Y/%m/%d')
+    except (ValueError, TypeError) as e:
+        logger.error(f"Error converting Gregorian date {gregorian_date} to Shamsi: {e}")
+        return "تاریخ نامعتبر"
