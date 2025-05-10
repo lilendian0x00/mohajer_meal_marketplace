@@ -2,7 +2,10 @@ import logging
 import re
 
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, Contact
+from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
+
+from config import WELCOME_MESSAGE
 from .common import (
     ASK_EDU_NUM, ASK_ID_NUM, ASK_PHONE,
     get_main_menu_keyboard
@@ -44,24 +47,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | Non
          await message.reply_text("خطای داخلی رخ داد، لطفا بعدا تلاش کنید.")
          return ConversationHandler.END
 
+    # Escape user's name for MarkdownV2
+    user_display_name_escaped = utility.escape_markdown_v2(
+        telegram_user.first_name or telegram_user.username or f"کاربر {telegram_user.id}"
+    )
+
     if db_user.is_verified:
         logger.info(f"User {telegram_user.id} is already verified. Showing main menu.")
-        user_display_name = telegram_user.first_name or telegram_user.username or f"کاربر {telegram_user.id}"
-        welcome_message = f"سلام مجدد {user_display_name} عزیز! 👋\nاز دکمه‌های زیر برای ادامه استفاده کنید:"
-        await message.reply_text(welcome_message, reply_markup=get_main_menu_keyboard())
+        welcome_back_greeting = f"سلام مجدد {user_display_name_escaped} عزیز\\! 👋\n\n"
+
+        replacement_text_escaped = utility.escape_markdown_v2(
+            "شما اعتبارسنجی شده‌اید و می‌توانید از تمامی امکانات ربات استفاده کنید!"
+        )
+
+        # Construct the part to be replaced carefully based on how it's built in config.py
+        part1 = utility.escape_markdown_v2("برای استفاده از امکانات ربات، ابتدا باید فرآیند")
+        part2_bold = f"*{utility.escape_markdown_v2('اعتبارسنجی')}*"  # Correct bold for V2
+        part3 = utility.escape_markdown_v2("را تکمیل کنید.")
+        string_to_replace = f"{part1} {part2_bold} {part3}"
+
+        full_welcome_message_for_verified = welcome_back_greeting + WELCOME_MESSAGE.replace(
+            string_to_replace,
+            replacement_text_escaped
+        )
+
+        await message.reply_text(
+            full_welcome_message_for_verified,
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode=ParseMode.MARKDOWN_V2,
+            disable_web_page_preview=True
+        )
         return ConversationHandler.END
     else:
         logger.info(f"User {telegram_user.id} is not verified. Starting verification process.")
-        user_display_name = telegram_user.first_name or telegram_user.username or f"کاربر {telegram_user.id}"
-        welcome_message = (
-            f"سلام {user_display_name} عزیز! 👋\n"
-            "به ربات خرید و فروش غذای مهاجر خوش آمدید.\n\n"
-            "برای استفاده از ربات، لطفا ابتدا فرآیند اعتبارسنجی را کامل کنید."
-        )
-        await message.reply_text(welcome_message)
+
+        new_user_greeting = f"سلام {user_display_name_escaped} عزیز\\! 👋\n"
+        full_welcome_message_for_new = new_user_greeting + WELCOME_MESSAGE
+
         await message.reply_text(
-            "1. لطفا شماره دانشجویی خود را وارد کنید:",
-            reply_markup=ReplyKeyboardRemove()
+            full_welcome_message_for_new,
+            parse_mode=ParseMode.MARKDOWN_V2,
+            disable_web_page_preview=True
+        )
+        await message.reply_text(
+            utility.escape_markdown_v2("1. لطفا شماره دانشجویی خود را وارد کنید:"),  # Also escape this prompt
+            reply_markup=ReplyKeyboardRemove(),
+            parse_mode=ParseMode.MARKDOWN_V2
         )
         return ASK_EDU_NUM
 
@@ -69,7 +100,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | Non
 async def receive_education_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receives educational number, saves it, asks for ID number."""
     message = update.message
-    if not message or not message.text: return ASK_EDU_NUM
+    if not message or not message.text:
+        return ASK_EDU_NUM
 
     edu_num = message.text.strip()
     logger.info(f"User {update.effective_user.id} entered educational number: {edu_num}")
@@ -79,7 +111,10 @@ async def receive_education_number(update: Update, context: ContextTypes.DEFAULT
         return ASK_EDU_NUM
 
     context.user_data['edu_num'] = edu_num
-    await message.reply_text("2. لطفا شماره ملی خود را وارد کنید:")
+    await message.reply_text(
+        utility.escape_markdown_v2("2. لطفا شماره ملی خود را وارد کنید:"),
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
     return ASK_ID_NUM
 
 async def receive_identity_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -96,13 +131,13 @@ async def receive_identity_number(update: Update, context: ContextTypes.DEFAULT_
 
     context.user_data['id_num'] = id_num
 
-    phone_button = KeyboardButton("ارسال شماره تلفن من", request_contact=True)
-    cancel_button = KeyboardButton("/cancel")
-    reply_markup = ReplyKeyboardMarkup([[phone_button], [cancel_button]], resize_keyboard=True, one_time_keyboard=True)
-
     await message.reply_text(
-        "3. برای تایید نهایی، لطفا شماره تلفن خود را با استفاده از دکمه زیر به اشتراک بگذارید.",
-        reply_markup=reply_markup
+        utility.escape_markdown_v2(
+            "3. برای تایید نهایی، لطفا شماره تلفن خود را با استفاده از دکمه زیر به اشتراک بگذارید."),
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton("ارسال شماره تلفن من", request_contact=True)], [KeyboardButton("/cancel")]],
+            resize_keyboard=True, one_time_keyboard=True),
+        parse_mode=ParseMode.MARKDOWN_V2
     )
     return ASK_PHONE
 
@@ -205,17 +240,58 @@ async def cancel_verification(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     return ConversationHandler.END
 
+
 # Help Command
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Displays help message."""
-    # Assume ConversationHandler state detection is done elsewhere if needed
-    # For simplicity, just show generic help or check context as before
-    if context.user_data and ('edu_num' in context.user_data or 'id_num' in context.user_data or 'phone_num' in context.user_data):
-        await update.message.reply_text("شما در حال حاضر در فرآیند اعتبارسنجی هستید. برای لغو /cancel را بزنید.")
-    else:
-       await update.message.reply_text(
-            "برای شروع کار با ربات از دستور /start استفاده کنید.\n"
-            "برای راهنمایی بیشتر از دستور /help استفاده کنید.\n"
-            "در طول فرآیندهای مختلف، می‌توانید با دستور /cancel آن را لغو کنید.\n"
-            "از دکمه‌های منوی اصلی برای دسترسی به امکانات استفاده کنید."
+    telegram_user = update.effective_user
+    user_display_name_escaped = utility.escape_markdown_v2(
+        telegram_user.first_name or telegram_user.username or f"کاربر {telegram_user.id}"
+    )
+
+    if context.user_data and (
+            'edu_num' in context.user_data or 'id_num' in context.user_data or 'phone_num' in context.user_data):
+        await update.message.reply_text(
+            utility.escape_markdown_v2("شما در حال حاضر در فرآیند اعتبارسنجی هستید. برای لغو /cancel را بزنید."),
+            parse_mode=ParseMode.MARKDOWN_V2
         )
+    else:
+        is_verified = False
+        async with get_db_session() as db_session:
+            db_user = await crud.get_user_by_telegram_id(db_session, telegram_user.id)
+            if db_user and db_user.is_verified:
+                is_verified = True
+
+        if is_verified:
+            welcome_back_greeting = f"سلام {user_display_name_escaped} عزیز\\! 👋\n\n"
+
+            # Construct the part to be replaced carefully based on how it's built in config.py
+            part1 = utility.escape_markdown_v2("برای استفاده از امکانات ربات، ابتدا باید فرآیند")
+            part2_bold = f"*{utility.escape_markdown_v2('اعتبارسنجی')}*"
+            part3 = utility.escape_markdown_v2("را تکمیل کنید.")
+            string_to_replace_in_help = f"{part1} {part2_bold} {part3}"
+
+            replacement_for_help_escaped = utility.escape_markdown_v2(
+                "در ادامه راهنمای استفاده از ربات آمده است. از دکمه‌های منوی اصلی برای دسترسی به امکانات استفاده کنید."
+            )
+
+            help_text = welcome_back_greeting + WELCOME_MESSAGE.replace(
+                string_to_replace_in_help,
+                replacement_for_help_escaped
+            )
+            await update.message.reply_text(
+                help_text,
+                reply_markup=get_main_menu_keyboard(),
+                parse_mode=ParseMode.MARKDOWN_V2,
+                disable_web_page_preview=True
+            )
+        else:
+            simple_help_escaped = utility.escape_markdown_v2(
+                "برای شروع کار با ربات از دستور /start استفاده کنید.\n"
+                "پس از اعتبارسنجی، راهنمای کامل نمایش داده خواهد شد.\n"
+                "در طول فرآیندهای مختلف، می‌توانید با دستور /cancel آن را لغو کنید."
+            )
+            await update.message.reply_text(
+                simple_help_escaped,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )

@@ -1,11 +1,13 @@
 import logging
 import asyncio
+from datetime import datetime
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import atexit
 import config
 from self_market.db import crud
-from background_tasks import check_pending_listings_timeout
-from config import BACKGROUND_CHECK_INTERVAL_MINUTES, PENDING_TIMEOUT_MINUTES
+from background_tasks import check_pending_listings_timeout, update_meals_from_samad
+from config import BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES, PENDING_TIMEOUT_MINUTES
 from bot import TelegramBot
 from self_market.db.session import init_db, get_db_session
 
@@ -104,13 +106,26 @@ async def main() -> None:
         # --- Scheduler Setup ---
         scheduler = AsyncIOScheduler(timezone="UTC")  # Use UTC or your preferred timezone
 
-        # Add the job, passing the Application object via kwargs
+        # Add listing timeout checker job
         scheduler.add_job(
             check_pending_listings_timeout,
             trigger='interval',
-            minutes=BACKGROUND_CHECK_INTERVAL_MINUTES,  # Use the constant
-            id='check_timeouts_job',  # Assign an ID
+            next_run_time=datetime.now(),
+            minutes=BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES,
+            id='check_timeouts_job',
             replace_existing=True,
+            kwargs={'app': ptb_app}
+        )
+
+        # Add meal updater job
+        scheduler.add_job(
+            update_meals_from_samad,
+            trigger='interval',
+            next_run_time=datetime.now(),
+            minutes=config.BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES,
+            id='update_meals_from_samad',
+            replace_existing=True,
+            misfire_grace_time=None,
             kwargs={'app': ptb_app}
         )
         logger.info(

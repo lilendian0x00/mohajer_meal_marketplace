@@ -33,7 +33,7 @@ async def _generate_buy_food_response(db_session: crud.AsyncSession) -> tuple[st
     refresh_button = InlineKeyboardButton("🔄 بروزرسانی لیست", callback_data=CALLBACK_BUY_REFRESH)
 
     if not available_listings:
-        message_text = title + "در حال حاضر هیچ غذایی برای فروش ثبت نشده است."
+        message_text = title + "در حال حاضر هیچ غذایی برای فروش ثبت نشده است\\."
         # Still include Refresh button even if no listings
         reply_markup = InlineKeyboardMarkup([[refresh_button]])
         return message_text, reply_markup
@@ -70,11 +70,25 @@ async def _generate_buy_food_response(db_session: crud.AsyncSession) -> tuple[st
         # Prepare the display part of the link, escaping it
         escaped_seller_display_name = escape_markdown(seller_name_raw_display, version=2)
 
+        seller_name = "ناشناس"
+
         if listing.seller:
-            # Construct the Markdown link *after* escaping the display part
-            seller_name = f"[{escaped_seller_display_name}](tg://user?id={listing.seller.telegram_id})"
-        else:
-            seller_name = escaped_seller_display_name  # Fallback to just the escaped name if no seller object or ID
+            seller_telegram_id = listing.seller.telegram_id
+
+            if listing.seller.username:
+                username_display_text = f"@{listing.seller.username}"
+                escaped_link_text = escape_markdown(username_display_text, version=2)
+                # The username in the URL itself does not need Markdown escaping
+                seller_name = f"[{escaped_link_text}](https://t.me/{listing.seller.username})"
+            else:
+                # Fallback for first_name if it's None or empty
+                first_name_raw = listing.seller.first_name if listing.seller.first_name else "ناشناس"
+
+                # Construct the full display text for the link
+                link_text_raw = f"{first_name_raw} (ID: {seller_telegram_id})"
+                escaped_link_text = escape_markdown(link_text_raw, version=2)
+                seller_name = f"[{escaped_link_text}](tg://user?id={seller_telegram_id})"
+
 
         price_str_raw = f"{listing.price:,.0f}" if listing.price is not None else "نامشخص"
         price_str = escape_markdown(price_str_raw, version=2)
@@ -265,7 +279,31 @@ async def handle_purchase_button(update: Update, context: ContextTypes.DEFAULT_T
         meal_type = escape_markdown(meal_type_raw, version=2)
         meal_date_str = escape_markdown(meal_date_str_raw, version=2)
 
-        seller_name = f"[{escape_markdown(f"{listing.seller.first_name}", version=2)}](tg://user?id={listing.seller.telegram_id})"
+        seller_telegram_id = listing.seller.telegram_id
+        seller_name = "ناشناس"
+
+        if listing.seller.username:
+            # Link text will be @username
+            # Link URL will be https://t.me/username
+            # The username part of the link text needs to be escaped for MarkdownV2
+            username_display_text = f"@{listing.seller.username}"
+            escaped_link_text = escape_markdown(username_display_text, version=2)
+            # The username in the URL itself does not need Markdown escaping
+            seller_name = f"[{escaped_link_text}](https://t.me/{listing.seller.username})"
+        else:
+            # 2. No username, use First Name (ID: TELEGRAM_ID)
+            # Link text will be "FirstName (ID: 1234567)"
+            # Link URL will be tg://user?id=1234567
+
+            # Fallback for first_name if it's None or empty
+            first_name_raw = listing.seller.first_name if listing.seller.first_name else "ناشناس"
+
+            # Construct the full display text for the link
+            link_text_raw = f"{first_name_raw} (ID: {seller_telegram_id})"
+            escaped_link_text = escape_markdown(link_text_raw, version=2)
+            seller_name = f"[{escaped_link_text}](tg://user?id={seller_telegram_id})"
+
+
 
         price_raw = listing.price
         price_str = escape_markdown(f"{price_raw:,.0f}" if price_raw is not None else "نامشخص", version=2)

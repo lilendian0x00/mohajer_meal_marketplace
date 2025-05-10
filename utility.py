@@ -1,5 +1,6 @@
 import re
-from datetime import date as GregorianDate, datetime
+from datetime import date as GregorianDate
+from datetime import datetime, timedelta
 import jdatetime
 import logging
 
@@ -89,3 +90,21 @@ def format_gregorian_date_to_shamsi(gregorian_date: GregorianDate | datetime | N
     except (ValueError, TypeError) as e:
         logger.error(f"Error converting Gregorian date {gregorian_date} to Shamsi: {e}")
         return "تاریخ نامعتبر"
+
+def get_iran_week_start_dates():
+    """
+    Calculates the start date of the current and next Iranian weeks.
+    The Iranian week starts on Saturday.
+    """
+    today = datetime.today()
+    # Calculate days to subtract to get to the previous Saturday
+    # datetime.weekday(): Monday is 0, ..., Saturday is 5, Sunday is 6
+    # To make Saturday the start (index 0 for calculation ease): (today.weekday() + 2) % 7
+    # If today is Monday (0), (0+2)%7 = 2. Monday - 2 days = Saturday.
+    # If today is Saturday (5), (5+2)%7 = 0. Saturday - 0 days = Saturday.
+    # If today is Sunday (6), (6+2)%7 = 1. Sunday - 1 day = Saturday.
+    days_to_subtract = (today.weekday() + 2) % 7
+    start_of_current_iran_week = today - timedelta(days=days_to_subtract)
+    start_of_next_iran_week = start_of_current_iran_week + timedelta(days=7)
+    return start_of_current_iran_week, start_of_next_iran_week
+
