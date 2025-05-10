@@ -169,20 +169,20 @@ async def receive_phone_number(update: Update, context: ContextTypes.DEFAULT_TYP
 
     phone_num_raw = contact.phone_number
     phone_num_normalized = phone_num_raw.replace("+", "").replace(" ", "")
-    # if not phone_num_normalized.startswith("98"):
-    #     logger.warning(f"User {user.id} shared non-Iranian phone number: {phone_num_raw}")
-    #     await message.reply_text(
-    #         "خطا: به نظر می‌رسد شماره تلفن ارسال شده متعلق به ایران نیست. لطفا شماره تلفن معتبر ایرانی خود را ارسال کنید یا /cancel بزنید."
-    #     )
-    #     phone_button = KeyboardButton("ارسال شماره تلفن من", request_contact=True)
-    #     cancel_button = KeyboardButton("/cancel")
-    #     reply_markup = ReplyKeyboardMarkup([[phone_button], [cancel_button]], resize_keyboard=True,
-    #                                        one_time_keyboard=True)
-    #     await message.reply_text(
-    #         "لطفا شماره تلفن *ایرانی* خودتان را با استفاده از دکمه زیر به اشتراک بگذارید.",
-    #         reply_markup=reply_markup
-    #     )
-    #     return ASK_PHONE
+    if not phone_num_normalized.startswith("98"):
+        logger.warning(f"User {user.id} shared non-Iranian phone number: {phone_num_raw}")
+        await message.reply_text(
+            "خطا: به نظر می‌رسد شماره تلفن ارسال شده متعلق به ایران نیست. لطفا شماره تلفن معتبر ایرانی خود را ارسال کنید یا /cancel بزنید."
+        )
+        phone_button = KeyboardButton("ارسال شماره تلفن من", request_contact=True)
+        cancel_button = KeyboardButton("/cancel")
+        reply_markup = ReplyKeyboardMarkup([[phone_button], [cancel_button]], resize_keyboard=True,
+                                           one_time_keyboard=True)
+        await message.reply_text(
+            "لطفا شماره تلفن *ایرانی* خودتان را با استفاده از دکمه زیر به اشتراک بگذارید.",
+            reply_markup=reply_markup
+        )
+        return ASK_PHONE
 
     phone_num_to_save = phone_num_normalized
     logger.info(f"User {user.id} shared valid Iranian phone number: ...{phone_num_to_save[-4:]}")
