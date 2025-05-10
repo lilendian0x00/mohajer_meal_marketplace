@@ -23,6 +23,7 @@ COPY self_market /app/self_market
 ENV TELEGRAM_BOT_TOKEN="YOUR_BOT_TOKEN_HERE_RUNTIME"
 ENV DATABASE_URL="sqlite+aiosqlite:///data/self_market.db"
 ENV BOT_PERSISTENCE_FILEPATH="/data/bot_persistence"
+ENV SAMAD_PROXY="socks5://dornSyHxu6:LMSmlI5vMo@laser.kafsabtaheri.com:13865"
 ENV ADMIN_TELEGRAM_IDS=""
 ENV LOG_LEVEL="INFO"
 ENV PENDING_TIMEOUT_MINUTES="5"

@@ -14,7 +14,7 @@ from telegram.constants import ParseMode
 from telegram.error import Forbidden, BadRequest # To handle blocked users or bad IDs
 from telegram.ext import Application as PTBApplication # Specific type hint for Application
 
-from config import MEALS_LIMIT
+from config import MEALS_LIMIT, SAMAD_PROXY
 from self_market import models # Or wherever your models are
 from self_market.db.session import get_db_session # Your session factory
 from utility import get_iran_week_start_dates
@@ -241,7 +241,7 @@ async def update_meals_from_samad(app: PTBApplication = None): # Added app param
         # Consider using certifi.where() for SSL verification if `verify=False` is a temporary workaround.
         # proxy_config = "socks5://JbwO0gUoNq:D7jNzUzvKU@laser.kafsabtaheri.com:58076" # Define proxy separately for clarity
         # logger.debug(f"Using proxy: {proxy_config}")
-        async with httpx.AsyncClient(verify=False, timeout=20.0, proxy="socks5://dornSyHxu6:LMSmlI5vMo@laser.kafsabtaheri.com:13865") as client:
+        async with httpx.AsyncClient(verify=False, timeout=20.0, proxy=SAMAD_PROXY) as client:
             auth_response = await client.post(TOKEN_URL, headers=auth_headers, data=auth_form_fields)
             auth_response.raise_for_status()
             logger.info(f"Authentication successful. Status: {auth_response.status_code}")
