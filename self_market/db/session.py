@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Create the async engine using the URL from config
 engine = create_async_engine(
     DATABASE_URL,
-    echo=False, # Keep echo False for cleaner logs now
+    echo=True, # Keep echo False for cleaner logs now
 )
 
 # Create the async session maker
