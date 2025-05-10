@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator, List, Dict, Any
 from sqlalchemy import text, select
 from datetime import date
-from config import DATABASE_URL as IMPORTED_DATABASE_URL
+from config import DATABASE_URL
 from .base import Base
 from .. import models
 
@@ -15,9 +15,30 @@ from .. import models
 logger = logging.getLogger(__name__)
 
 
+# Simple extraction assuming the DSN format is consistent
+dsn_prefix = "sqlite+aiosqlite:///"
+db_file_path_from_config = ""
+if DATABASE_URL.startswith(dsn_prefix):
+    db_file_path_from_config = DATABASE_URL[len(dsn_prefix):]
+else:
+    # Fallback or raise error if DSN format is unexpected
+    logger.error(f"Unexpected DATABASE_URL format from config: {DATABASE_URL!r}. Expected to start with '{dsn_prefix}'. Using hardcoded fallback /data/self_market.db")
+    db_file_path_from_config = "/data/self_market.db" # Fallback, not ideal
+
+# Optional: Aggressive cleaning for the extracted path (if you still suspect issues with it)
+# cleaned_path_str = str(db_file_path_from_config)
+# normalized_path = unicodedata.normalize('NFKC', cleaned_path_str)
+# printable_chars_path = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-. রবি/" # Only path chars
+# reconstructed_path_parts = [char for char in normalized_path if char in printable_chars_path]
+# final_db_file_path = "".join(reconstructed_path_parts).strip()
+# For now, let's assume the extracted path is clean after stripping in config.py
+final_db_file_path = db_file_path_from_config.strip() # Ensure it's stripped too
+
+logger.info(f"DEBUG SESSION.PY: Extracted DB file path for connect_args: '{final_db_file_path!r}'")
+
 engine = create_async_engine(
-    "sqlite+aiosqlite:///", # Provide a base URL without the path part
-    connect_args={"database": IMPORTED_DATABASE_URL},
+    "sqlite+aiosqlite:///", # Minimal base URL, path is provided by connect_args
+    connect_args={"database": final_db_file_path}, # Pass ONLY the file path here
     echo=True
 )
 
