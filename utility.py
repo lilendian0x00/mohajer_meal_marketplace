@@ -127,7 +127,7 @@ def generate_qr_code_image(data: str) -> bytes | None:
         # Generate QR code
         qr = qrcode.QRCode(
             version=1, # Can be adjusted or set to None for auto-sizing
-            error_correction=qrcode.constants.ERROR_CORRECT_L, # L (Low, ~7%), M (Medium, ~15%), Q (Quartile, ~25%), H (High, ~30%)
+            error_correction=qrcode.constants.ERROR_CORRECT_M, # L (Low, ~7%), M (Medium, ~15%), Q (Quartile, ~25%), H (High, ~30%)
             box_size=10, # Size of each "box" in the QR grid
             border=4,    # Thickness of the border (in boxes)
         )

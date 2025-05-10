@@ -401,25 +401,65 @@ async def handle_confirm_purchase(update: Update, context: ContextTypes.DEFAULT_
     if updated_listing and seller_card_number and seller_telegram_id:
         price_str = f"{updated_listing.price:,.0f}" if updated_listing.price is not None else "مبلغ"
         # Escape meal_desc for V2 *before* using it in the f-string for buyer
-        meal_desc_escaped = utility.escape_markdown_v2(
-            updated_listing.meal.description if updated_listing.meal else "غذا")
+        raw_meal_description = updated_listing.meal.description if updated_listing.meal else "غذا"
+
+        # Construct parts and escape them as needed for MARKDOWN_V2
+        part1 = f"درخواست خرید شما برای آگهی "
+        part2_listing_id = f"`{listing_id}`"  # listing_id is an int, safe in backticks
+        part3_meal_intro = f" ("
+        # meal_desc_escaped should be the result of utility.escape_markdown_v2(raw_meal_description)
+        part4_meal_desc = utility.escape_markdown_v2(raw_meal_description)
+        part5_meal_outro_and_status = f") ثبت شد.\n"  # Note the period here
+
+        part6_payment_instruction1 = f"⏳ لطفا مبلغ "
+        # **{price_str} تومان** - bold is V2 syntax, price_str is numeric
+        part7_price = f"*{utility.escape_markdown_v2(price_str)} تومان*"  # Escape price_str just in case, then bold
+        part8_payment_instruction2 = f" را به شماره کارت زیر واریز نمایید:\n\n"
+
+        part9_card_intro = f"💳 "
+        # `{utility.escape_markdown_v2(seller_card_number)}` - card number in backticks, content escaped
+        part10_card_number = f"`{utility.escape_markdown_v2(seller_card_number)}`"
+        part11_card_outro = f"\n\n"
+
+        part12_seller_confirmation_notice = f"پس از واریز، فروشنده باید دریافت وجه را تایید کند.\n"  # Note the period
+        part13_warning_intro = f"🚨 "
+        part14_warning_text = f"*هشدار:* ربات مسئولیتی در قبال تراکنش ندارد.\n\n"  # Note the period, bold text
+        part15_cancellation_option = f"در صورت انصراف از خرید، دکمه زیر را بزنید:"
 
         buyer_message = (
-            f"درخواست خرید شما برای آگهی `{listing_id}` ({meal_desc_escaped}) ثبت شد\\.\n"  # Escape dot for V2
-            f"⏳ لطفا مبلغ **{price_str} تومان** را به شماره کارت زیر واریز نمایید:\n\n"
-            f"💳 `{utility.escape_markdown_v2(seller_card_number)}`\n\n"  # Escape potential special chars in card num
-            f"پس از واریز، فروشنده باید دریافت وجه را تایید کند\\.\n"  # Escape dot
-            f"🚨 *هشدار:* ربات مسئولیتی در قبال تراکنش ندارد\\.\n\n"  # Escape dot
-            f"در صورت انصراف از خرید، دکمه زیر را بزنید:"
+            f"{utility.escape_markdown_v2(part1)}"
+            f"{part2_listing_id}"
+            f"{utility.escape_markdown_v2(part3_meal_intro)}"
+            f"{part4_meal_desc}"  # Assumed already escaped or use the raw and escape here
+            f"{utility.escape_markdown_v2(part5_meal_outro_and_status)}"
+            f"{utility.escape_markdown_v2(part6_payment_instruction1)}"
+            f"{part7_price}"  # price_str is now wrapped in utility.escape_markdown_v2 then bolded
+            f"{utility.escape_markdown_v2(part8_payment_instruction2)}"
+            f"{utility.escape_markdown_v2(part9_card_intro)}"
+            f"{part10_card_number}"  # seller_card_number is escaped and in backticks
+            f"{utility.escape_markdown_v2(part11_card_outro)}"
+            f"{utility.escape_markdown_v2(part12_seller_confirmation_notice)}"
+            f"{utility.escape_markdown_v2(part13_warning_intro)}"
+            # For part14_warning_text, since it contains *...*, we need to be careful.
+            # If we want "هشدار:" to be bold, we construct it as *{escaped_text}*
+            # The colon and the period also need escaping.
+            f"*{utility.escape_markdown_v2('هشدار:')}* {utility.escape_markdown_v2(' ربات مسئولیتی در قبال تراکنش ندارد.')}\n\n"
+            f"{utility.escape_markdown_v2(part15_cancellation_option)}"
         )
+
         buyer_cancel_button = InlineKeyboardButton(
             "❌ لغو درخواست خرید",
             callback_data=f'{CALLBACK_BUYER_CANCEL_PENDING}_{listing_id}'
         )
         buyer_markup = InlineKeyboardMarkup([[buyer_cancel_button]])
 
-        # Edit buyer's message first
-        await query.edit_message_text(buyer_message, parse_mode=ParseMode.MARKDOWN, reply_markup=buyer_markup)
+        # When sending this message, use ParseMode.MARKDOWN_V2
+        logger.debug(f"BUYER MESSAGE (handle_confirm_purchase) constructed: {buyer_message}")
+        await query.edit_message_text(
+            text=buyer_message,
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=buyer_markup
+        )
 
         # Notify Seller
         try:
@@ -441,7 +481,7 @@ async def handle_confirm_purchase(update: Update, context: ContextTypes.DEFAULT_
             seller_message = (
                 f"🔔 درخواست خرید جدید برای آگهی شما\\!\n\n"
                 # Escape the parentheses around meal_desc_escaped -> \\( ... \\)
-                f"آگهی: `{listing_id}` \\({meal_desc_escaped}\\)\n"
+                f"آگهی: `{listing_id}` \\({utility.escape_markdown_v2(raw_meal_description)}\\)\n"
                 f"خریدار: {buyer_name_escaped} \\(ID: `{user.id}`\\)\n"
                 f"مبلغ: {price_str_escaped} تومان\n\n"
                 f"خریدار اطلاعات کارت شما را دریافت کرد\\. لطفا *پس از دریافت وجه*، دکمه 'تایید دریافت وجه' را بزنید\\.\n"
@@ -690,7 +730,27 @@ async def handle_seller_confirmation(update: Update, context: ContextTypes.DEFAU
         error_message = "خطای جدی در سرور رخ داد."
         finalized_listing = None
     if finalized_listing and buyer_telegram_id and reservation_code:
-        # ... (code to edit seller's message) ...
+        text_part_seller_1 = f"✅ دریافت وجه برای آگهی "
+        text_part_seller_2_id = f"`{listing_id}`"  # listing_id is int, safe in backticks
+        text_part_seller_3 = f" تایید شد.\nکد و بارکد برای خریدار ارسال می‌شود."
+
+        escaped_success_edit_text = (
+            f"{utility.escape_markdown_v2(text_part_seller_1)}"
+            f"{text_part_seller_2_id}"  # listing_id is an int, safe in backticks
+            f"{utility.escape_markdown_v2(text_part_seller_3)}"  # This will escape the periods
+        )
+
+        logger.info(
+            f"SELLER MSG EDIT (SUCCESS): Attempting to edit seller's message to: {escaped_success_edit_text}")  # YOUR ADDED LOG
+        try:
+            await query.edit_message_text(
+                text=escaped_success_edit_text,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            logger.info("SELLER MSG EDIT (SUCCESS): Successfully edited seller's message.")
+        except Exception as e_edit_seller_success:
+            logger.error(f"SELLER MSG EDIT (SUCCESS): FAILED to edit seller's message: {e_edit_seller_success}",
+                         exc_info=True)
 
         barcode_image_bytes = utility.generate_qr_code_image(data=reservation_code)
 
@@ -743,5 +803,17 @@ async def handle_seller_confirmation(update: Update, context: ContextTypes.DEFAU
             await context.bot.send_message(user.id,
                                            f"پرداخت تایید شد، اما در ارسال کد به خریدار آگهی {listing_id} مشکلی پیش آمد. لطفا کد `{reservation_code}` را دستی برای او ارسال کنید.")
 
-    else:
-        await query.edit_message_text(error_message, parse_mode=ParseMode.MARKDOWN)  # Ensure parse_mode if error_message contains markdown
+    else:  # finalization failed or data missing
+        error_edit_text = utility.escape_markdown_v2(error_message)
+        logger.info(
+            f"SELLER MSG EDIT (FAILURE): Attempting to edit seller's message to: {error_edit_text}")  # YOUR ADDED LOG
+        try:
+            await query.edit_message_text(
+                error_edit_text,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            logger.info("SELLER MSG EDIT (FAILURE): Successfully edited seller's message with error.")
+        except Exception as e_edit_seller_failure:
+            logger.error(
+                f"SELLER MSG EDIT (FAILURE): FAILED to edit seller's message with error: {e_edit_seller_failure}",
+                exc_info=True)
