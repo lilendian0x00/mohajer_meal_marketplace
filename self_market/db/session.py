@@ -1,6 +1,4 @@
 import logging
-import os
-
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from contextlib import asynccontextmanager
@@ -13,10 +11,6 @@ from .. import models
 
 # Logger instance for this module
 logger = logging.getLogger(__name__)
-
-actual_db_url_from_env = os.environ.get("DATABASE_URL")
-logger.info(f"DEBUG: DATABASE_URL from os.environ in session.py: {actual_db_url_from_env}")
-logger.info(f"DEBUG: DATABASE_URL being used by create_async_engine: {DATABASE_URL}")
 
 # Create the async engine using the URL from config
 engine = create_async_engine(
