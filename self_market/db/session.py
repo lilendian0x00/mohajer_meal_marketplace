@@ -14,31 +14,10 @@ from .. import models
 # Logger instance for this module
 logger = logging.getLogger(__name__)
 
-
-# Simple extraction assuming the DSN format is consistent
-dsn_prefix = "sqlite+aiosqlite:///"
-db_file_path_from_config = ""
-if DATABASE_URL.startswith(dsn_prefix):
-    db_file_path_from_config = DATABASE_URL[len(dsn_prefix):]
-else:
-    # Fallback or raise error if DSN format is unexpected
-    logger.error(f"Unexpected DATABASE_URL format from config: {DATABASE_URL!r}. Expected to start with '{dsn_prefix}'. Using hardcoded fallback /data/self_market.db")
-    db_file_path_from_config = "/data/self_market.db" # Fallback, not ideal
-
-# Optional: Aggressive cleaning for the extracted path (if you still suspect issues with it)
-# cleaned_path_str = str(db_file_path_from_config)
-# normalized_path = unicodedata.normalize('NFKC', cleaned_path_str)
-# printable_chars_path = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-. রবি/" # Only path chars
-# reconstructed_path_parts = [char for char in normalized_path if char in printable_chars_path]
-# final_db_file_path = "".join(reconstructed_path_parts).strip()
-# For now, let's assume the extracted path is clean after stripping in config.py
-final_db_file_path = db_file_path_from_config.strip() # Ensure it's stripped too
-
-logger.info(f"DEBUG SESSION.PY: Extracted DB file path for connect_args: '{final_db_file_path!r}'")
+db_file_path = "/data/self_market.db"
 
 engine = create_async_engine(
-    "sqlite+aiosqlite:///", # Minimal base URL, path is provided by connect_args
-    connect_args={"database": final_db_file_path}, # Pass ONLY the file path here
+    "sqlite+aiosqlite:///"+DATABASE_URL,
     echo=True
 )
 
@@ -137,7 +116,7 @@ async def init_db():
         logger.error("CRITICAL: No tables found in Base.metadata! Check model definitions and imports in models.py and session.py.")
         raise RuntimeError("No models registered with SQLAlchemy Base, cannot initialize database.")
 
-    logger.info(f"Attempting to create tables in database: {IMPORTED_DATABASE_URL}")
+    logger.info(f"Attempting to create tables in database: {DATABASE_URL}")
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
