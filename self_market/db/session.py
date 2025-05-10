@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, List, Dict, Any
-from sqlalchemy import text, select
+from sqlalchemy import text, select, NullPool
 from datetime import date
 from config import DATABASE_URL as IMPORTED_DATABASE_URL
 from .base import Base
@@ -55,6 +55,7 @@ if final_reconstructed_url != known_good_url:
 engine = create_async_engine(
     final_reconstructed_url, # USE THE MOST CLEANED VERSION
     echo=True,
+    poolclass=NullPool,
 )
 
 
