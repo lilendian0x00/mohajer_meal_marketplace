@@ -18,7 +18,7 @@ db_file_path = "/data/self_market.db"
 
 engine = create_async_engine(
     "sqlite+aiosqlite:///"+DATABASE_URL,
-    echo=True
+    echo=False
 )
 
 # Create the async session maker
