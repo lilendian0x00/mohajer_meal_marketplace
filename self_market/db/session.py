@@ -13,9 +13,11 @@ from .. import models
 
 # Logger instance for this module
 logger = logging.getLogger(__name__)
+
+
 # --- Debugging the IMPORTED_DATABASE_URL ---
-logger.info(f"DEBUG SESSION.PY: IMPORTED_DATABASE_URL raw from config: '{IMPORTED_DATABASE_URL!r}'")
-logger.info(f"DEBUG SESSION.PY: Length of IMPORTED_DATABASE_URL: {len(IMPORTED_DATABASE_URL)}")
+print(f"DEBUG SESSION.PY: IMPORTED_DATABASE_URL raw from config: '{IMPORTED_DATABASE_URL!r}'")
+print(f"DEBUG SESSION.PY: Length of IMPORTED_DATABASE_URL: {len(IMPORTED_DATABASE_URL)}")
 
 # Aggressively clean and reconstruct the URL
 # 1. Ensure it's a string (should be)
@@ -32,13 +34,13 @@ reconstructed_url_parts = [char for char in normalized_url if char in printable_
 final_reconstructed_url = "".join(reconstructed_url_parts).strip()
 
 
-logger.info(f"DEBUG SESSION.PY: Final Reconstructed URL for engine: '{final_reconstructed_url!r}'")
-logger.info(f"DEBUG SESSION.PY: Length of Final Reconstructed URL: {len(final_reconstructed_url)}")
+print(f"DEBUG SESSION.PY: Final Reconstructed URL for engine: '{final_reconstructed_url!r}'")
+print(f"DEBUG SESSION.PY: Length of Final Reconstructed URL: {len(final_reconstructed_url)}")
 
 # The known good string
 known_good_url = "sqlite+aiosqlite:///data/self_market.db"
-logger.info(f"DEBUG SESSION.PY: Known Good URL for comparison: '{known_good_url!r}'")
-logger.info(f"DEBUG SESSION.PY: Length of Known Good URL: {len(known_good_url)}")
+print(f"DEBUG SESSION.PY: Known Good URL for comparison: '{known_good_url!r}'")
+print(f"DEBUG SESSION.PY: Length of Known Good URL: {len(known_good_url)}")
 
 if final_reconstructed_url != known_good_url:
     logger.warning("WARNING: The aggressively cleaned URL still differs from the known good URL!")
@@ -107,7 +109,7 @@ SEED_MEALS: List[Dict[str, Any]] = [
 
 async def seed_database(session: AsyncSession):
     """Inserts predefined meals into the database if they don't already exist."""
-    logger.info("Starting database seeding for Meals...")
+    print("Starting database seeding for Meals...")
     inserted_count = 0
     for meal_data in SEED_MEALS:
         # Check if a meal with the same description, date, and type already exists
@@ -137,27 +139,27 @@ async def seed_database(session: AsyncSession):
     if inserted_count > 0:
         try:
             await session.commit()
-            logger.info(f"Successfully inserted {inserted_count} new seed meals.")
+            print(f"Successfully inserted {inserted_count} new seed meals.")
         except Exception as e:
             await session.rollback()
             logger.error(f"Error committing seed data: {e}", exc_info=True)
     else:
-        logger.info("No new seed meals needed.")
+        print("No new seed meals needed.")
 
 async def init_db():
     """Initializes the database by creating tables based on Base metadata."""
     registered_tables = list(Base.metadata.tables.keys())
-    logger.info(f"SQLAlchemy Base.metadata knows about tables: {registered_tables}")
+    print(f"SQLAlchemy Base.metadata knows about tables: {registered_tables}")
 
     if not registered_tables:
         logger.error("CRITICAL: No tables found in Base.metadata! Check model definitions and imports in models.py and session.py.")
         raise RuntimeError("No models registered with SQLAlchemy Base, cannot initialize database.")
 
-    logger.info(f"Attempting to create tables in database: {IMPORTED_DATABASE_URL}")
+    print(f"Attempting to create tables in database: {IMPORTED_DATABASE_URL}")
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-        logger.info("SQLAlchemy Base.metadata.create_all execution completed.")
+        print("SQLAlchemy Base.metadata.create_all execution completed.")
 
         # Seed the database
         async with async_session_factory() as session:
