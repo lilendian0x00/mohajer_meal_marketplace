@@ -52,8 +52,6 @@ if final_reconstructed_url != known_good_url:
 
 # Create the async engine using the aggressively cleaned and reconstructed URL
 
-print("HELLO WORLD")
-exit(1)
 engine = create_async_engine(
     final_reconstructed_url, # USE THE MOST CLEANED VERSION
     echo=True,
