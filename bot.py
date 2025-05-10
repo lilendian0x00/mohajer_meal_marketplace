@@ -105,7 +105,7 @@ class TelegramBot:
         self.token = token
         builder = Application.builder().token(self.token)
 
-        persistence = PicklePersistence(filepath="bot_persistence")
+        persistence = PicklePersistence(filepath=config.BOT_PERSISTENCE_FILEPATH)
         builder.persistence(persistence)
 
         self.application = builder.build()

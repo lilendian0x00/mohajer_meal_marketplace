@@ -9,7 +9,7 @@ load_dotenv()
 # --- Bot/Database Credentials ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./self_market.db")
-
+BOT_PERSISTENCE_FILEPATH = os.environ.get("BOT_PERSISTENCE_FILEPATH", "/data/bot_persistence")
 
 # --- Admin Configuration ---
 # Comma-separated list of Telegram User IDs for admins
