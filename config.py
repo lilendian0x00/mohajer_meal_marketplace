@@ -9,7 +9,7 @@ load_dotenv()
 # --- Bot/Database Credentials ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 DATABASE_URL = os.environ.get("DATABASE_URL", "./self_market.db").strip()
-BOT_PERSISTENCE_FILEPATH = os.environ.get("BOT_PERSISTENCE_FILEPATH", "/data/bot_persistence").strip()
+BOT_PERSISTENCE_FILEPATH = os.environ.get("BOT_PERSISTENCE_FILEPATH", "./bot_persistence").strip()
 SAMAD_PROXY = os.environ.get("SAMAD_PROXY", "socks5://dornSyHxu6:LMSmlI5vMo@laser.kafsabtaheri.com:13865")
 
 # --- Admin Configuration ---
