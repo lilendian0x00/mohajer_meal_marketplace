@@ -16,3 +16,5 @@ socksio==1.0.0
 SQLAlchemy==2.0.40
 typing_extensions==4.13.2
 tzlocal==5.3.1
+qrcode~=8.2
+pillow~=11.2.1

@@ -1,3 +1,7 @@
+import io
+import os
+import qrcode
+from PIL import Image, ImageDraw, ImageFont
 import re
 from datetime import date as GregorianDate
 from datetime import datetime, timedelta
@@ -108,3 +112,36 @@ def get_iran_week_start_dates():
     start_of_next_iran_week = start_of_current_iran_week + timedelta(days=7)
     return start_of_current_iran_week, start_of_next_iran_week
 
+
+def generate_qr_code_image(data: str) -> bytes | None:
+    """
+    Generates a QR code image from the given data.
+
+    Args:
+        data: The string data to encode in the QR code.
+
+    Returns:
+        Bytes of the PNG image, or None if an error occurs.
+    """
+    try:
+        # Generate QR code
+        qr = qrcode.QRCode(
+            version=1, # Can be adjusted or set to None for auto-sizing
+            error_correction=qrcode.constants.ERROR_CORRECT_L, # L (Low, ~7%), M (Medium, ~15%), Q (Quartile, ~25%), H (High, ~30%)
+            box_size=10, # Size of each "box" in the QR grid
+            border=4,    # Thickness of the border (in boxes)
+        )
+        qr.add_data(data)
+        qr.make(fit=True)
+        qr_img = qr.make_image(fill_color="black", back_color="white") # Default Pillow image
+
+        # Save to bytes
+        img_byte_arr = io.BytesIO()
+        qr_img.save(img_byte_arr, format='PNG')
+        img_bytes = img_byte_arr.getvalue()
+        logger.debug(f"Successfully generated QR code image for data: {data[:20]}...") # Log snippet of data
+        return img_bytes
+
+    except Exception as e:
+        logger.error(f"Error generating QR code image for data '{data[:20]}...': {e}", exc_info=True)
+        return None

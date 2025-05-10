@@ -1,3 +1,4 @@
+import io
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -423,7 +424,7 @@ async def handle_confirm_purchase(update: Update, context: ContextTypes.DEFAULT_
         # Notify Seller
         try:
             # Escape buyer name for V2
-            buyer_name_escaped = utility.escape_markdown_v2(user.first_name or user.username or f"کاربر {user.id}")
+            buyer_name_escaped = utility.escape_markdown_v2(f"@{user.username}" or user.first_name)
             # Escape price string just in case it contains '.' or other chars (though unlikely for price_str)
             price_str_escaped = utility.escape_markdown_v2(price_str)
 
@@ -646,7 +647,9 @@ async def handle_seller_confirmation(update: Update, context: ContextTypes.DEFAU
     try:
         listing_id = int(query.data.split('_')[-1])
     except:
-        await query.edit_message_text("خطا: دکمه نامعتبر."); return
+        logger.error(f"Invalid callback data for seller confirmation: {query.data}")
+        await query.edit_message_text("خطا: دکمه نامعتبر.");
+        return
 
     logger.info(f"Seller {user.id} confirmed payment for listing {listing_id}")
 
@@ -663,37 +666,82 @@ async def handle_seller_confirmation(update: Update, context: ContextTypes.DEFAU
                 db=db_session, listing_id=listing_id, confirming_seller_telegram_id=user.id
             )
 
-            if finalized_listing:
-                buyer_telegram_id = finalized_listing.buyer.telegram_id if finalized_listing.buyer else None
-            else:  # Check failure reason if finalize returned None
-                # Fetch listing again to provide specific feedback
-                listing_check = await crud.get_listing_by_id(db_session, listing_id)  # Ensure await is here
+            if finalized_listing and finalized_listing.buyer:  # Ensure buyer is loaded
+                buyer_telegram_id = finalized_listing.buyer.telegram_id
+            elif not finalized_listing:
+                listing_check = await crud.get_listing_by_id(db_session, listing_id)
                 if not listing_check:
                     error_message = "آگهی یافت نشد."
-                elif listing_check.seller_id != user.id:
-                    error_message = "شما فروشنده نیستید."
+                elif not listing_check.seller or listing_check.seller.telegram_id != user.id:
+                    error_message = "شما فروشنده این آگهی نیستید."
                 elif listing_check.status == models.ListingStatus.SOLD:
                     error_message = "فروش قبلا نهایی شده."
                 elif listing_check.status != models.ListingStatus.AWAITING_CONFIRMATION:
                     error_message = f"وضعیت آگهی ({listing_check.status.value}) قابل تایید نیست."
                 else:
-                    error_message = "خطا در بروزرسانی وضعیت."  # Fallback if reason unclear
+                    error_message = "خطا در بروزرسانی وضعیت."
+
 
     except Exception as e:
-        # Log the type of e and convert it to string for the message, include full traceback
         logger.error(
             f"Caught exception during finalize process for listing {listing_id}. Type: {type(e)}, Error: {str(e)}",
-            exc_info=True  # This is important to get the full traceback
+            exc_info=True
         )
-        error_message = "خطای جدی."
+        error_message = "خطای جدی در سرور رخ داد."
         finalized_listing = None
-    # Notify
     if finalized_listing and buyer_telegram_id and reservation_code:
-        await query.edit_message_text(f"✅ دریافت وجه برای آگهی `{listing_id}` تایید شد.\nکد برای خریدار ارسال شد.")
+        # ... (code to edit seller's message) ...
+
+        barcode_image_bytes = utility.generate_qr_code_image(data=reservation_code)
+
+        # Construct the caption, escaping static parts
+        # Part 1
+        text_part1 = f"✅ پرداخت شما برای آگهی "
+        # Part 2 (dynamic listing_id, already safe in backticks)
+        text_part2_listing_id = f"`{listing_id}`"
+        # Part 3
+        text_part3 = f" تایید شد!\n\nکد رزرو شما: "
+        # Part 4 (dynamic reservation_code, ensure it's escaped if it can contain special chars)
+        # The backticks around it are Markdown syntax.
+        text_part4_code = f"`{utility.escape_markdown_v2(str(reservation_code))}`"
+        # Part 5
+        text_part5 = f"\n\nمی‌توانید از بارکد بالا یا کد برای دریافت غذا استفاده کنید."
+
+        buyer_message_caption = (
+            f"{utility.escape_markdown_v2(text_part1)}"
+            f"{text_part2_listing_id}"  # listing_id is int, safe in backticks
+            f"{utility.escape_markdown_v2(text_part3)}"
+            f"{text_part4_code}"  # Code is already escaped and in backticks
+            f"{utility.escape_markdown_v2(text_part5)}"
+        )
+
         try:
-            buyer_message = (f"✅ پرداخت شما برای آگهی `{listing_id}` تایید شد!\n\nکد رزرو شما: `{reservation_code}`\n\nاز این کد برای دریافت غذا استفاده کنید.")
-            await context.bot.send_message(chat_id=buyer_telegram_id, text=buyer_message, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_menu_keyboard())
-            logger.info(f"Sent code for listing {listing_id} to buyer {buyer_telegram_id}")
-        except Exception as notify_err: logger.error(f"Failed send code to buyer {buyer_telegram_id}: {notify_err}"); await context.bot.send_message(user.id, f"خطا در ارسال کد به خریدار آگهی {listing_id}.")
+            if barcode_image_bytes:
+                await context.bot.send_photo(
+                    chat_id=buyer_telegram_id,
+                    photo=io.BytesIO(barcode_image_bytes),
+                    caption=buyer_message_caption,
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=get_main_menu_keyboard()
+                )
+                logger.info(f"Sent QR code and text for listing {listing_id} to buyer {buyer_telegram_id}")
+            else:
+                # Fallback
+                logger.error(f"Barcode generation failed for listing {listing_id}. Sending text code only.")
+                # If sending text only, and the text is the same caption, it also needs to be escaped for V2
+                await context.bot.send_message(
+                    chat_id=buyer_telegram_id,
+                    text=buyer_message_caption,  # Use the same fully escaped caption
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=get_main_menu_keyboard()
+                )
+        except Exception as notify_err:
+            logger.error(
+                f"Failed to send code/photo to buyer {buyer_telegram_id} for listing {listing_id}: {notify_err}",
+                exc_info=True)
+            # Inform seller about the failure
+            await context.bot.send_message(user.id,
+                                           f"پرداخت تایید شد، اما در ارسال کد به خریدار آگهی {listing_id} مشکلی پیش آمد. لطفا کد `{reservation_code}` را دستی برای او ارسال کنید.")
+
     else:
-        await query.edit_message_text(error_message)
+        await query.edit_message_text(error_message, parse_mode=ParseMode.MARKDOWN)  # Ensure parse_mode if error_message contains markdown
