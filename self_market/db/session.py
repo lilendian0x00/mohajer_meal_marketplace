@@ -12,9 +12,12 @@ from .. import models
 # Logger instance for this module
 logger = logging.getLogger(__name__)
 
+db_file_path = "/data/self_market.db" # Extracted path
+logger.info(f"DEBUG: Directly creating engine with db_file_path: {db_file_path}") # Your debug log
+
 # Create the async engine using the URL from config
 engine = create_async_engine(
-    DATABASE_URL,
+    f"sqlite+aiosqlite:///{db_file_path}",
     echo=True, # Keep echo False for cleaner logs now
 )
 
