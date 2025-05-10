@@ -1,0 +1,35 @@
+version: '3.8' # Specify the Docker Compose version
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mohajer_meal_marketplace_bot
+    restart: unless-stopped
+    network_mode: "host"
+
+    volumes:
+      # Mount a named volume to /data inside the container.
+      # This will persist your SQLite database (self_market.db)
+      # and the bot_persistence file across container restarts.
+      - app_data:/data
+
+    env_file:
+      - .env
+
+    environment:
+      DATABASE_URL: "./self_market.db"
+      BOT_PERSISTENCE_FILEPATH: "./bot_persistence"
+      LOG_LEVEL: "INFO" # e.g., DEBUG, INFO, WARNING, ERROR
+      SAMAD_PROXY: "socks5://dornSyHxu6:LMSmlI5vMo@laser.kafsabtaheri.com:13865"
+
+      # Application-specific configurations (can also be in .env or use Dockerfile defaults)
+      PENDING_TIMEOUT_MINUTES: "6"
+      LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES: "5"
+      MEALS_UPDATE_CHECK_INTERVAL_MINUTES: "720" # 12 hours
+
+volumes:
+  # Define the named volume that will be used for persistent storage.
+  app_data:
+    # driver: local # This is the default driver, can be omitted.
