@@ -154,10 +154,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | Non
 #     return ASK_PHONE
 
 async def receive_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    # ... (Copy the full function implementation from the original handlers.py) ...
-    # Ensure imports for Contact, ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton are present
-    # Ensure imports for get_db_session, crud, models, logger are present
-    # Ensure call to get_main_menu_keyboard() works
     message = update.message
     user = update.effective_user
     contact: Contact | None = message.contact
@@ -174,14 +170,15 @@ async def receive_phone_number(update: Update, context: ContextTypes.DEFAULT_TYP
         cancel_button = KeyboardButton("/cancel")
         reply_markup = ReplyKeyboardMarkup([[phone_button], [cancel_button]], resize_keyboard=True, one_time_keyboard=True)
         await message.reply_text(
-            "لطفا شماره تلفن *خودتان* را با استفاده از دکمه زیر به اشتراک بگذارید.",
-            reply_markup=reply_markup
+            "لطفا شماره تلفن *خودتان* را با استفاده از دکمه زیر به اشتراک بگذارید.", # Keep self prompt
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2 # Ensure parse mode for *
         )
         return ASK_PHONE
 
     phone_num_raw = contact.phone_number
     phone_num_normalized = phone_num_raw.replace("+", "").replace(" ", "")
-    if not phone_num_normalized.startswith("98"):
+    if not phone_num_normalized.startswith("98"): # Assuming Iranian numbers
         logger.warning(f"User {user.id} shared non-Iranian phone number: {phone_num_raw}")
         await message.reply_text(
             "خطا: به نظر می‌رسد شماره تلفن ارسال شده متعلق به ایران نیست. لطفا شماره تلفن معتبر ایرانی خود را ارسال کنید یا /cancel بزنید."
@@ -191,41 +188,30 @@ async def receive_phone_number(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup = ReplyKeyboardMarkup([[phone_button], [cancel_button]], resize_keyboard=True,
                                            one_time_keyboard=True)
         await message.reply_text(
-            "لطفا شماره تلفن *ایرانی* خودتان را با استفاده از دکمه زیر به اشتراک بگذارید.",
-            reply_markup=reply_markup
+            "لطفا شماره تلفن *ایرانی* خودتان را با استفاده از دکمه زیر به اشتراک بگذارید.", # Keep self prompt
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2 # Ensure parse mode for *
         )
         return ASK_PHONE
 
     phone_num_to_save = phone_num_normalized
     logger.info(f"User {user.id} shared valid Iranian phone number: ...{phone_num_to_save[-4:]}")
 
-    edu_num = context.user_data.get('edu_num')
-    id_num = context.user_data.get('id_num')
-
-    if not edu_num or not id_num:
-        logger.error(f"Missing edu_num or id_num in user_data for user {user.id} during phone step.")
-        await message.reply_text(
-            "خطای داخلی رخ داد. لطفا فرآیند را با /start مجددا شروع کنید.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        context.user_data.clear()
-        return ConversationHandler.END
+    # edu_num and id_num are no longer collected from context.user_data
 
     try:
         async with get_db_session() as db_session:
             updated_user = await crud.update_user_verification(
                 db=db_session,
                 telegram_id=user.id,
-                # edu_num=edu_num,
-                # id_num=id_num,
                 phone_num=phone_num_to_save
             )
             if not updated_user:
-                 raise Exception("User not found during verification update")
+                 raise Exception("User not found or update failed during verification update")
 
-            logger.info(f"User {user.id} successfully verified and details updated.")
+            logger.info(f"User {user.id} successfully verified (phone only) and details updated.")
             await message.reply_text(
-                "✅ اعتبارسنجی شما با موفقیت انجام شد! از الان می‌توانید از امکانات ربات استفاده کنید.",
+                "✅ اعتبارسنجی شما (بر اساس شماره تلفن) با موفقیت انجام شد! از الان می‌توانید از امکانات ربات استفاده کنید.",
                 reply_markup=get_main_menu_keyboard()
             )
             context.user_data.clear()
@@ -260,50 +246,44 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user_display_name_escaped = utility.escape_markdown_v2(
         telegram_user.first_name or telegram_user.username or f"کاربر {telegram_user.id}"
     )
+    # Check if user is in the middle of the (now very short) verification
+    if context.user_data and any(key in context.user_data for key in []): # No specific keys expected anymore
+        # if /help is called during ASK_PHONE, it's fine to show help.
+        # The /cancel command is the primary way out.
+        pass # Let help proceed normally
 
-    if context.user_data and (
-            'edu_num' in context.user_data or 'id_num' in context.user_data or 'phone_num' in context.user_data):
+    is_verified = False
+    async with get_db_session() as db_session:
+        db_user = await crud.get_user_by_telegram_id(db_session, telegram_user.id)
+        if db_user and db_user.is_verified:
+            is_verified = True
+
+    if is_verified:
+        welcome_back_greeting = f"سلام {user_display_name_escaped} عزیز\\! 👋\n\n"
+        part1 = utility.escape_markdown_v2("برای استفاده از امکانات ربات، ابتدا باید فرآیند")
+        part2_bold = f"*{utility.escape_markdown_v2('اعتبارسنجی')}*"
+        part3 = utility.escape_markdown_v2("را تکمیل کنید.")
+        string_to_replace_in_help = f"{part1} {part2_bold} {part3}"
+        replacement_for_help_escaped = utility.escape_markdown_v2(
+            "در ادامه راهنمای استفاده از ربات آمده است. از دکمه‌های منوی اصلی برای دسترسی به امکانات استفاده کنید."
+        )
+        help_text = welcome_back_greeting + WELCOME_MESSAGE.replace(
+            string_to_replace_in_help,
+            replacement_for_help_escaped
+        )
         await update.message.reply_text(
-            utility.escape_markdown_v2("شما در حال حاضر در فرآیند اعتبارسنجی هستید. برای لغو /cancel را بزنید."),
-            parse_mode=ParseMode.MARKDOWN_V2
+            help_text,
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode=ParseMode.MARKDOWN_V2,
+            disable_web_page_preview=True
         )
     else:
-        is_verified = False
-        async with get_db_session() as db_session:
-            db_user = await crud.get_user_by_telegram_id(db_session, telegram_user.id)
-            if db_user and db_user.is_verified:
-                is_verified = True
-
-        if is_verified:
-            welcome_back_greeting = f"سلام {user_display_name_escaped} عزیز\\! 👋\n\n"
-
-            # Construct the part to be replaced carefully based on how it's built in config.py
-            part1 = utility.escape_markdown_v2("برای استفاده از امکانات ربات، ابتدا باید فرآیند")
-            part2_bold = f"*{utility.escape_markdown_v2('اعتبارسنجی')}*"
-            part3 = utility.escape_markdown_v2("را تکمیل کنید.")
-            string_to_replace_in_help = f"{part1} {part2_bold} {part3}"
-
-            replacement_for_help_escaped = utility.escape_markdown_v2(
-                "در ادامه راهنمای استفاده از ربات آمده است. از دکمه‌های منوی اصلی برای دسترسی به امکانات استفاده کنید."
-            )
-
-            help_text = welcome_back_greeting + WELCOME_MESSAGE.replace(
-                string_to_replace_in_help,
-                replacement_for_help_escaped
-            )
-            await update.message.reply_text(
-                help_text,
-                reply_markup=get_main_menu_keyboard(),
-                parse_mode=ParseMode.MARKDOWN_V2,
-                disable_web_page_preview=True
-            )
-        else:
-            simple_help_escaped = utility.escape_markdown_v2(
-                "برای شروع کار با ربات از دستور /start استفاده کنید.\n"
-                "پس از اعتبارسنجی، راهنمای کامل نمایش داده خواهد شد.\n"
-                "در طول فرآیندهای مختلف، می‌توانید با دستور /cancel آن را لغو کنید."
-            )
-            await update.message.reply_text(
-                simple_help_escaped,
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
+        simple_help_escaped = utility.escape_markdown_v2(
+            "برای شروع کار با ربات از دستور /start استفاده کنید.\n"
+            "پس از اعتبارسنجی (ارسال شماره تماس)، راهنمای کامل نمایش داده خواهد شد.\n"
+            "در طول فرآیند، می‌توانید با دستور /cancel آن را لغو کنید."
+        )
+        await update.message.reply_text(
+            simple_help_escaped,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
