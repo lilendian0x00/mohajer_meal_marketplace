@@ -32,7 +32,7 @@ LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 HISTORY_PAGE_SIZE: int = 5
 
 # How long (in minutes) a listing can stay in AWAITING_CONFIRMATION before timeout
-PENDING_TIMEOUT_MINUTES: int = int(os.environ.get("PENDING_TIMEOUT_MINUTES", "720"))
+PENDING_TIMEOUT_MINUTES: int = int(os.environ.get("PENDING_TIMEOUT_MINUTES", "1440"))
 
 # How often (in minutes) the listing timeout is checked
 BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES: int = int(os.environ.get("LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES", "5"))
