@@ -7,7 +7,8 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 from config import WELCOME_MESSAGE
 from .common import (
-    ASK_EDU_NUM, ASK_ID_NUM, ASK_PHONE,
+    # ASK_EDU_NUM, ASK_ID_NUM,
+    ASK_PHONE,
     get_main_menu_keyboard
 )
 import utility
@@ -89,12 +90,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | Non
             parse_mode=ParseMode.MARKDOWN_V2,
             disable_web_page_preview=True
         )
+        # await message.reply_text(
+        #     utility.escape_markdown_v2("1. لطفا شماره دانشجویی خود را وارد کنید:"),  # Also escape this prompt
+        #     reply_markup=ReplyKeyboardRemove(),
+        #     parse_mode=ParseMode.MARKDOWN_V2
+        # )
+
+        # Directly ask for phone number
         await message.reply_text(
-            utility.escape_markdown_v2("1. لطفا شماره دانشجویی خود را وارد کنید:"),  # Also escape this prompt
-            reply_markup=ReplyKeyboardRemove(),
+            utility.escape_markdown_v2(
+                "برای تکمیل اعتبارسنجی، لطفا شماره تلفن خود را با استفاده از دکمه زیر به اشتراک بگذارید:"),
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("ارسال شماره تلفن من", request_contact=True)], [KeyboardButton("/cancel")]],
+                resize_keyboard=True, one_time_keyboard=True),
             parse_mode=ParseMode.MARKDOWN_V2
         )
-        return ASK_EDU_NUM
+        # return ASK_EDU_NUM
+        return ASK_PHONE
 
 # --- Verification Conversation Handlers ---
 # async def receive_education_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
