@@ -97,49 +97,49 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | Non
         return ASK_EDU_NUM
 
 # --- Verification Conversation Handlers ---
-async def receive_education_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Receives educational number, saves it, asks for ID number."""
-    message = update.message
-    if not message or not message.text:
-        return ASK_EDU_NUM
+# async def receive_education_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+#     """Receives educational number, saves it, asks for ID number."""
+#     message = update.message
+#     if not message or not message.text:
+#         return ASK_EDU_NUM
+#
+#     edu_num = message.text.strip()
+#     logger.info(f"User {update.effective_user.id} entered educational number: {edu_num}")
+#
+#     if not edu_num.isdigit():
+#         await message.reply_text("شماره دانشجویی نامعتبر است. لطفا فقط عدد وارد کنید:")
+#         return ASK_EDU_NUM
+#
+#     context.user_data['edu_num'] = edu_num
+#     await message.reply_text(
+#         utility.escape_markdown_v2("2. لطفا شماره ملی خود را وارد کنید:"),
+#         parse_mode=ParseMode.MARKDOWN_V2
+#     )
+#     return ASK_ID_NUM
 
-    edu_num = message.text.strip()
-    logger.info(f"User {update.effective_user.id} entered educational number: {edu_num}")
-
-    if not edu_num.isdigit():
-        await message.reply_text("شماره دانشجویی نامعتبر است. لطفا فقط عدد وارد کنید:")
-        return ASK_EDU_NUM
-
-    context.user_data['edu_num'] = edu_num
-    await message.reply_text(
-        utility.escape_markdown_v2("2. لطفا شماره ملی خود را وارد کنید:"),
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
-    return ASK_ID_NUM
-
-async def receive_identity_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Receives identity number, saves it, asks for phone number."""
-    message = update.message
-    if not message or not message.text: return ASK_ID_NUM
-
-    id_num = message.text.strip()
-    logger.info(f"User {update.effective_user.id} entered identity number: ***") # Masked log
-
-    if not id_num.isdigit() or not utility.is_valid_iranian_national_id(id_num):
-        await message.reply_text("شماره ملی نامعتبر است.")
-        return ASK_ID_NUM
-
-    context.user_data['id_num'] = id_num
-
-    await message.reply_text(
-        utility.escape_markdown_v2(
-            "3. برای تایید نهایی، لطفا شماره تلفن خود را با استفاده از دکمه زیر به اشتراک بگذارید."),
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton("ارسال شماره تلفن من", request_contact=True)], [KeyboardButton("/cancel")]],
-            resize_keyboard=True, one_time_keyboard=True),
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
-    return ASK_PHONE
+# async def receive_identity_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+#     """Receives identity number, saves it, asks for phone number."""
+#     message = update.message
+#     if not message or not message.text: return ASK_ID_NUM
+#
+#     id_num = message.text.strip()
+#     logger.info(f"User {update.effective_user.id} entered identity number: ***") # Masked log
+#
+#     if not id_num.isdigit() or not utility.is_valid_iranian_national_id(id_num):
+#         await message.reply_text("شماره ملی نامعتبر است.")
+#         return ASK_ID_NUM
+#
+#     context.user_data['id_num'] = id_num
+#
+#     await message.reply_text(
+#         utility.escape_markdown_v2(
+#             "3. برای تایید نهایی، لطفا شماره تلفن خود را با استفاده از دکمه زیر به اشتراک بگذارید."),
+#         reply_markup=ReplyKeyboardMarkup(
+#             [[KeyboardButton("ارسال شماره تلفن من", request_contact=True)], [KeyboardButton("/cancel")]],
+#             resize_keyboard=True, one_time_keyboard=True),
+#         parse_mode=ParseMode.MARKDOWN_V2
+#     )
+#     return ASK_PHONE
 
 async def receive_phone_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # ... (Copy the full function implementation from the original handlers.py) ...
@@ -204,8 +204,8 @@ async def receive_phone_number(update: Update, context: ContextTypes.DEFAULT_TYP
             updated_user = await crud.update_user_verification(
                 db=db_session,
                 telegram_id=user.id,
-                edu_num=edu_num,
-                id_num=id_num,
+                # edu_num=edu_num,
+                # id_num=id_num,
                 phone_num=phone_num_to_save
             )
             if not updated_user:

@@ -220,8 +220,8 @@ async def delete_meal(db: AsyncSession, meal_id: int) -> bool:
 async def update_user_verification(
     db: AsyncSession,
     telegram_id: int,
-    edu_num: str,
-    id_num: str,
+    # edu_num: str,
+    # id_num: str,
     phone_num: str
 ) -> models.User | None:
     """Updates user details from verification and sets is_verified to True."""
@@ -230,8 +230,8 @@ async def update_user_verification(
         # This shouldn't happen if called after get_or_create_user
         return None
 
-    db_user.education_number = edu_num
-    db_user.identity_number = id_num
+    # db_user.education_number = edu_num
+    # db_user.identity_number = id_num
     db_user.phone_number = phone_num
     db_user.is_verified = True
 

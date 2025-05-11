@@ -125,8 +125,8 @@ class TelegramBot:
             verification_conv_handler = ConversationHandler(
                 entry_points=[CommandHandler("start", handlers.start)],  # Start command triggers it
                 states={
-                    handlers.ASK_EDU_NUM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.receive_education_number)],
-                    handlers.ASK_ID_NUM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.receive_identity_number)],
+                    # handlers.ASK_EDU_NUM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.receive_education_number)],
+                    # handlers.ASK_ID_NUM: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.receive_identity_number)],
                     handlers.ASK_PHONE: [MessageHandler(filters.CONTACT, handlers.receive_phone_number)],
                 },
                 fallbacks=[CommandHandler("cancel", handlers.cancel_verification)],

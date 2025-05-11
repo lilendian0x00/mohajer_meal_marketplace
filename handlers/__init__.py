@@ -14,7 +14,9 @@ from .admin import *
 # This is good practice and helps tools understand the package structure.
 __all__ = [
     # Common Constants & Functions
-    'ASK_EDU_NUM', 'ASK_ID_NUM', 'ASK_PHONE',
+    # 'ASK_EDU_NUM',
+    # 'ASK_ID_NUM',
+    'ASK_PHONE',
     'SELL_ASK_CODE', 'SELL_ASK_MEAL', 'SELL_ASK_PRICE', 'SELL_CONFIRM',
     'SETTINGS_ASK_CARD',
     'CALLBACK_CANCEL_SELL_FLOW', 'CALLBACK_BUYER_CANCEL_PENDING',
@@ -28,8 +30,11 @@ __all__ = [
     'get_main_menu_keyboard',
 
     # Verification Handlers
-    'start', 'receive_education_number', 'receive_identity_number',
-    'receive_phone_number', 'cancel_verification', 'help_command',
+    'start',
+    # 'receive_education_number',
+    # 'receive_identity_number',
+    'receive_phone_number',
+    'cancel_verification', 'help_command',
 
     # Selling Handlers
     'handle_sell_food', 'receive_reservation_code', 'receive_meal_selection',
