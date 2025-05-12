@@ -1,6 +1,6 @@
+import asyncio
 import logging
 import unicodedata
-
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from contextlib import asynccontextmanager
@@ -31,15 +31,42 @@ async_session_factory = sessionmaker(
 @asynccontextmanager
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     """Provide a transactional scope around a series of operations."""
-    # This function remains the same
-    async with async_session_factory() as session:
+    session: AsyncSession | None = None # Initialize session variable
+    session_instance_id = None
+    # Get the current asyncio task, handle cases where there might not be one
+    current_task = asyncio.current_task()
+    task_name = current_task.get_name() if current_task else "Unknown Task"
+    try:
+        # Use the session factory directly to create the session
+        session = async_session_factory()
+        session_instance_id = id(session) # Get a unique ID for this session instance
+        logger.debug(f"[TASK: {task_name}] Acquiring session: {session_instance_id}")
         try:
-            yield session
-        except Exception:
-            await session.rollback()
-            raise
-        finally:
-            await session.close()
+            yield session # Yield the created session
+        except Exception as e:
+            logger.error(f"[TASK: {task_name}] Exception in session {session_instance_id}, rolling back: {e}", exc_info=True)
+            if session: # Ensure session exists before rollback
+                # Check if the session is still active before rolling back
+                if session.is_active:
+                   try:
+                       await session.rollback()
+                       logger.debug(f"[TASK: {task_name}] Rolled back session: {session_instance_id}")
+                   except Exception as rb_exc:
+                       logger.error(f"[TASK: {task_name}] Exception during rollback for session {session_instance_id}: {rb_exc}", exc_info=True)
+                else:
+                   logger.warning(f"[TASK: {task_name}] Session {session_instance_id} inactive during exception handling, cannot rollback.")
+            raise # Re-raise the exception for the outer handler
+    finally:
+        # This outer finally block handles the closing
+        if session: # Check if session was successfully created/assigned
+            logger.debug(f"[TASK: {task_name}] Closing session: {session_instance_id}")
+            try:
+                await session.close()
+                logger.debug(f"[TASK: {task_name}] Closed session: {session_instance_id}")
+            except Exception as close_exc:
+                logger.error(f"[TASK: {task_name}] Exception during close for session {session_instance_id}: {close_exc}", exc_info=True)
+        else:
+            logger.warning(f"[TASK: {task_name}] Attempted to close session in finally, but session was None.")
 
 
 # Seed Data

@@ -21,53 +21,56 @@ logger = logging.getLogger(__name__)
 
 # Sell Food Conversation Handlers
 async def handle_sell_food(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | None:
-    """Starts the sell food conversation. Asks for reservation code."""
     user = update.effective_user
     message = update.message
     if not user or not message: return ConversationHandler.END
 
     logger.info(f"'Sell Food' button pressed by user {user.id}. Starting conversation.")
 
-    # Check Verification Status
+    next_state = ConversationHandler.END # Default to END
+    reply_text = "خطا در پردازش درخواست شما." # Default error message
+    reply_markup = get_main_menu_keyboard() # Default markup (main menu)
+
     try:
-        async with get_db_session() as db_session:
+        async with get_db_session() as db_session: # Acquire session
             db_user = await crud.get_user_by_telegram_id(db_session, user.id)
 
             # Check Verification
             if not db_user or not db_user.is_verified:
                 logger.warning(f"Unverified user {user.id} attempted action: sell food")
-                await message.reply_text("برای فروش غذا، ابتدا اعتبارسنجی کنید (/start).")
-                return ConversationHandler.END  # End if not verified
-
+                reply_text = "برای فروش غذا، ابتدا اعتبارسنجی کنید (/start)."
+                # next_state remains END
             # Check Credit Card ONLY if verified
-            if not db_user.credit_card_number:
+            elif not db_user.credit_card_number:
                 logger.info(f"User {user.id} attempting to sell, but CC number is missing.")
-                # Inform and stop (Guide to Settings)
-                await message.reply_text(
+                reply_text = (
                     "⚠️ برای فروش غذا و دریافت وجه، باید شماره کارت بانکی خود را ثبت کنید.\n"
-                    "لطفا این کار را از طریق منوی '⚙️ تنظیمات' انجام دهید.",
-                    reply_markup=get_main_menu_keyboard()  # Go back to main menu
+                    "لطفا این کار را از طریق منوی '⚙️ تنظیمات' انجام دهید."
                 )
+                # next_state remains END
+            else:
+                logger.info(f"User {user.id} is verified and has CC number. Proceeding with sell flow.")
+                context.user_data['seller_db_id'] = db_user.id # Store DB ID early
 
-                return ConversationHandler.END  # Stop the selling process for now
-
-            # If all checks pass, proceed
-            logger.info(f"User {user.id} is verified and has CC number. Proceeding with sell flow.")
-            context.user_data['seller_db_id'] = db_user.id
-
-            cancel_button = InlineKeyboardButton("❌ لغو", callback_data=CALLBACK_CANCEL_SELL_FLOW)
-            reply_markup = InlineKeyboardMarkup([[cancel_button]])
-
-            await message.reply_text(
-                "لطفا کد رزرو دانشگاه (کد سلف) که می‌خواهید بفروشید را وارد کنید:",
-                reply_markup=reply_markup
-            )
-            return SELL_ASK_CODE
+                cancel_button = InlineKeyboardButton("❌ لغو", callback_data=CALLBACK_CANCEL_SELL_FLOW)
+                reply_markup = InlineKeyboardMarkup([[cancel_button]]) # Specific markup for next step
+                reply_text = "لطفا کد رزرو دانشگاه (کد سلف) که می‌خواهید بفروشید را وارد کنید:"
+                next_state = SELL_ASK_CODE # Set next state only on success
 
     except Exception as e:
         logger.error(f"DB error checking user prerequisites for {user.id} in handle_sell_food: {e}", exc_info=True)
-        await message.reply_text("خطا در بررسی وضعیت اعتبارسنجی. لطفا دوباره تلاش کنید.")
-        return ConversationHandler.END
+        reply_text = "خطا در بررسی وضعیت اعتبارسنجی. لطفا دوباره تلاش کنید."
+        # next_state remains END
+        # Ensure context is cleared on DB error during prerequisite check
+        context.user_data.pop('seller_db_id', None)
+
+    # Send the reply *after* the session is closed
+    try:
+        await message.reply_text(reply_text, reply_markup=reply_markup)
+    except Exception as send_err:
+        logger.error(f"Failed to send reply in handle_sell_food: {send_err}")
+
+    return next_state
 
 
 async def receive_reservation_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -178,53 +181,68 @@ async def receive_reservation_code(update: Update, context: ContextTypes.DEFAULT
 
 
 async def receive_meal_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handles the inline button press for selecting the meal being sold."""
     query = update.callback_query
     user = update.effective_user
     await query.answer() # Answer callback
 
     callback_data = query.data
+    next_state = ConversationHandler.END # Default to END on error
+    edit_text = "خطای داخلی: دکمه نامعتبر." # Default error message
+    edit_markup = None
+
     try:
         meal_id = int(callback_data.split('_')[-1]) # Extract ID from sell_select_meal_ID
         logger.info(f"User {user.id} selected meal_id {meal_id} for listing.")
-    except (ValueError, IndexError):
-        logger.error(f"Invalid callback data format for meal selection: {callback_data}")
-        await query.edit_message_text("خطای داخلی: دکمه نامعتبر.")
-        return ConversationHandler.END # End on error
 
-    # Fetch meal details (esp. price limit)
-    try:
-         async with get_db_session() as db_session:
+        async with get_db_session() as db_session: # Acquire session
              meal = await db_session.get(models.Meal, meal_id) # Use session.get for PK lookup
              if not meal:
                  logger.error(f"Meal ID {meal_id} selected by user {user.id} not found in DB.")
-                 await query.edit_message_text("خطا: غذای انتخاب شده یافت نشد.")
-                 return ConversationHandler.END
+                 edit_text = "خطا: غذای انتخاب شده یافت نشد."
+                 # next_state remains ConversationHandler.END
+             else:
+                 # Successfully fetched meal, prepare the next step message
+                 context.user_data['meal_id'] = meal.id
+                 context.user_data['price_limit'] = meal.price_limit # Store limit (can be None)
+                 context.user_data['meal_description'] = meal.description or "غذای نامشخص"
 
-             context.user_data['meal_id'] = meal.id
-             context.user_data['price_limit'] = meal.price_limit # Store limit (can be None)
-             context.user_data['meal_description'] = meal.description or "غذای نامشخص"
+                 price_prompt = "لطفا قیمتی که می‌خواهید برای فروش این غذا تعیین کنید را به تومان وارد کنید:"
+                 if meal.price_limit is not None:
+                      # Format limit for display
+                      try:
+                           limit_decimal = Decimal(meal.price_limit)
+                           price_prompt += f"\n(توجه: حداکثر قیمت مجاز برای این غذا {limit_decimal:,.0f} تومان است)"
+                      except (InvalidOperation, ValueError, TypeError): # Handle potential conversion issues
+                           logger.warning(f"Could not format price_limit '{meal.price_limit}' for meal {meal_id}.")
+                           # Show raw value if formatting fails
+                           price_prompt += f"\n(توجه: حداکثر قیمت مجاز: {meal.price_limit})"
 
-             price_prompt = "لطفا قیمتی که می‌خواهید برای فروش این غذا تعیین کنید را به تومان وارد کنید:"
-             if meal.price_limit is not None:
-                 # Format limit for display
-                 try:
-                      limit_decimal = Decimal(meal.price_limit)
-                      price_prompt += f"\n(توجه: حداکثر قیمت مجاز برای این غذا {limit_decimal:,.0f} تومان است)"
-                 except InvalidOperation:
-                      price_prompt += f"\n(توجه: حداکثر قیمت مجاز: {meal.price_limit})"
+                 cancel_button = InlineKeyboardButton("❌ لغو", callback_data=CALLBACK_CANCEL_SELL_FLOW)
+                 edit_markup = InlineKeyboardMarkup([[cancel_button]])
+                 edit_text = price_prompt
+                 next_state = SELL_ASK_PRICE # Set next state only on success
 
-             cancel_button = InlineKeyboardButton("❌ لغو", callback_data=CALLBACK_CANCEL_SELL_FLOW)
-             reply_markup = InlineKeyboardMarkup([[cancel_button]])
-
-             await query.edit_message_text(price_prompt, reply_markup=reply_markup) # Edit previous message
-             return SELL_ASK_PRICE
-
+    except (ValueError, IndexError):
+        logger.error(f"Invalid callback data format for meal selection: {callback_data}")
+        # edit_text already set to default error
+        # next_state remains ConversationHandler.END
     except Exception as e:
-        logger.error(f"Error fetching meal details for ID {meal_id}: {e}", exc_info=True)
-        await query.edit_message_text("خطا در دریافت اطلاعات غذا. لطفا با /start دوباره شروع کنید.")
+        logger.error(f"Error processing meal selection for ID {meal_id}: {e}", exc_info=True)
+        edit_text = "خطا در دریافت اطلاعات غذا. لطفا با /start دوباره شروع کنید."
+        # next_state remains ConversationHandler.END
+
+    # Perform the message edit *after* the session is closed
+    try:
+        await query.edit_message_text(edit_text, reply_markup=edit_markup)
+    except Exception as edit_err:
+         logger.error(f"Failed to edit message after meal selection processing: {edit_err}")
+         # TODO: Might want to send a new message as fallback if edit fails
+
+    # Clear context
+    if next_state == ConversationHandler.END:
         context.user_data.clear()
-        return ConversationHandler.END
+
+    return next_state
 
 async def receive_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receives the price, validates it against limit, asks for confirmation."""
@@ -294,9 +312,13 @@ async def confirm_listing(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     price = context.user_data['price'] # This is a Decimal
 
     logger.info(f"User {user.id} confirmed listing: code={code}, meal={meal_id}, price={price}")
+
+    edit_text = "خطا در ثبت آگهی." # Default error message
+    success = False
+
     # Create Listing in DB
     try:
-        async with get_db_session() as db_session:
+        async with get_db_session() as db_session: # Acquire session
             new_listing = await crud.create_listing(
                 db=db_session,
                 seller_db_id=seller_db_id,
@@ -305,11 +327,29 @@ async def confirm_listing(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 price=price
             )
         if new_listing:
-            await query.edit_message_text(f"✅ آگهی شما با شماره `{new_listing.id}` ثبت شد.", parse_mode=ParseMode.MARKDOWN)
-            await query.message.reply_text("منوی اصلی:", reply_markup=get_main_menu_keyboard())
-        else: await query.edit_message_text("خطا: امکان ثبت آگهی نیست (ممکن است کد تکراری باشد).")
+            edit_text = f"✅ آگهی شما با شماره `{new_listing.id}` ثبت شد\\."
+            success = True
+        else:
+            edit_text = escape_markdown_v2("خطا: امکان ثبت آگهی نیست (ممکن است کد تکراری باشد).")
+
     except Exception as e:
-        logger.error(f"Error creating listing: {e}"); await query.edit_message_text("خطا در ثبت آگهی.")
+        logger.error(f"Error creating listing: {e}", exc_info=True)
+        # edit_text remains default error message
+
+    # Edit the original confirmation message
+    try:
+        await query.edit_message_text(edit_text, parse_mode=ParseMode.MARKDOWN_V2)
+    except Exception as edit_err:
+        logger.error(f"Failed to edit message after listing confirmation: {edit_err}", exc_info=True)
+
+    # If successful, also send the main menu keyboard
+    if success and query.message:
+        try:
+            await query.message.reply_text("منوی اصلی:", reply_markup=get_main_menu_keyboard())
+        except Exception as send_err:
+            logger.error(f"Failed to send main menu after successful listing: {send_err}")
+
+
     context.user_data.clear()
     return ConversationHandler.END
 
