@@ -179,14 +179,23 @@ async def handle_buy_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not query or not user:
         return
 
-    await query.answer("🔄 در حال بروزرسانی...") # Acknowledge button press
+    # await query.answer("🔄 در حال بروزرسانی...") # Acknowledge button press
 
     logger.info(f"User {user.id} pressed 'Refresh List' for buy food.")
 
+    message_text = "خطا در بروزرسانی لیست."  # Default error
+    reply_markup = None  # Default markup
+
     try:
-        async with get_db_session() as db_session:
+        async with get_db_session() as db_session:  # Session acquired
+            # Acknowledge button press *after* getting session, before long operation
+            # This is generally safer than acknowledging right at the start.
+            # If DB connection fails, the user doesn't get a potentially misleading "updating" message.
+            await query.answer("🔄 در حال بروزرسانی...")
             message_text, reply_markup = await _generate_buy_food_response(db_session)
 
+        # Edit the message *after* the session is closed
+        try:
             await query.edit_message_text(
                 text=message_text,
                 parse_mode=ParseMode.MARKDOWN_V2,
@@ -194,25 +203,39 @@ async def handle_buy_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 disable_web_page_preview=True
             )
             logger.debug(f"Successfully refreshed buy list for user {user.id}")
+        except BadRequest as e:
+            # Explicitly check for "Message is not modified"
+            if "Message is not modified" in str(e):
+                logger.info(f"Buy list refresh for user {user.id} resulted in no changes.")
+                # Answer the callback quietly if the message didn't change
+                await query.answer("لیست بروز است.")
+            else:
+                # Log and report other BadRequest errors
+                logger.error(f"Unhandled BadRequest refreshing buy list for user {user.id}: {e}", exc_info=True)
+                # Use answer for non-critical errors after initial edit attempt
+                await query.answer("خطای تلگرام در بروزرسانی.", show_alert=True)
+        except Forbidden:
+            logger.warning(f"Bot blocked by user {user.id}, cannot refresh buy list.")
+            await query.answer("خطا: امکان ویرایش پیام نیست. ربات مسدود شده؟", show_alert=True)
+        except Exception as e_edit:
+            # Catch other potential errors during edit_message_text
+            logger.error(f"Error editing message after refresh for user {user.id}: {e_edit}", exc_info=True)
+            await query.answer("خطا در نمایش لیست بروز شده.", show_alert=True)
 
-    except Forbidden:
-        logger.warning(f"Bot blocked by user {user.id}, cannot refresh buy list.")
-        await query.answer("خطਾ: امکان ویرایش پیام نیست. ربات مسدود شده؟", show_alert=True)
-    except BadRequest as e:
-        # Handle specific case where message hasn't changed
-        if "Message is not modified" in str(e):
-            logger.info(f"Buy list refresh for user {user.id} resulted in no changes.")
-            await query.answer("لیست بروز است.") # Inform user message hasn't changed
-        else:
-            logger.error(f"BadRequest refreshing buy list for user {user.id}: {e}", exc_info=True)
-            await query.answer("خطا در بروزرسانی لیست.", show_alert=True)
-    except Exception as e:
-        logger.error(f"Error refreshing buy list for user {user.id}: {e}", exc_info=True)
-        # Try to edit the message to show error, otherwise just answer callback
+    except Exception as e_db:
+        # This catches errors during DB interaction (within async with)
+        logger.error(f"Error fetching data for buy list refresh for user {user.id}: {e_db}", exc_info=True)
+        # If DB fails, we might not have even answered the callback yet
         try:
-            await query.edit_message_text("خطا در بروزرسانی لیست. لطفا دوباره تلاش کنید.")
+            # Try to answer the original callback with an error
+            await query.answer("خطا در دریافت اطلاعات بروز شده.", show_alert=True)
+        except Exception as e_answer:
+            logger.error(f"Failed to even answer callback query after DB error: {e_answer}")
+        # Also try to edit the message if possible (might fail if query already answered)
+        try:
+            await query.edit_message_text("خطا در دریافت اطلاعات بروز شده.")
         except Exception:
-            await query.answer("خطا در بروزرسانی لیست.", show_alert=True)
+            pass  # Ignore error if editing fails after answering
 
 
 async def handle_purchase_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
