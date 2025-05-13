@@ -517,55 +517,68 @@ async def set_active_status(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 @admin_required
 async def get_user_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # /getuser
     message = update.message
     if not message or not context.args or len(context.args) != 1:
-        await message.reply_text("استفاده: `/getuser <user_telegram_id>`", parse_mode=ParseMode.MARKDOWN_V2)
+        await message.reply_text(
+            f"استفاده: `{escape_markdown_v2('/getuser <user_telegram_id | @username>')}`",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
         return
 
-    try:
-        target_user_tg_id = int(context.args[0])
-    except ValueError:
-        await message.reply_text("آیدی تلگرام کاربر باید یک عدد باشد\\.", parse_mode=ParseMode.MARKDOWN_V2)
-        return
+    identifier = context.args[0]
+    db_user: models.User | None = None
 
     async with get_db_session() as db_session:
-        user = await crud.get_user_details_for_admin(db_session, target_user_tg_id) # This loads listings/purchases
+        if identifier.isdigit(): # Assume it's a Telegram ID
+            try:
+                target_user_tg_id = int(identifier)
+                db_user = await crud.get_user_details_for_admin(db_session, target_user_tg_id)
+            except ValueError: # Should not happen if isdigit() is true, but defensive
+                await message.reply_text(
+                    escape_markdown_v2("آیدی تلگرام کاربر باید یک عدد باشد."),
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+                return
+        elif identifier.startswith("@"): # Assume it's a username
+            username_to_find = identifier[1:] # Remove the "@"
+            db_user = await crud.get_user_by_username_for_admin(db_session, username_to_find) # New CRUD needed
+        else: # Not a valid ID and not starting with @
+            await message.reply_text(
+                escape_markdown_v2("ورودی نامعتبر است. لطفا آیدی عددی تلگرام یا نام کاربری با @ (مانند @testuser) وارد کنید."),
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            return
 
-    if user:
+    if db_user:
         credit_card_display = "ثبت نشده"
-        if user.credit_card_number:
-            # raw_card = user.credit_card_number
-            # if len(raw_card) > 4:
-            #     credit_card_display = f"`**** **** **** {escape_markdown_v2(raw_card[-4:])}`"
-            # else:
-            #     credit_card_display = f"`{escape_markdown_v2(raw_card)}` \\(کوتاه\\)"
-            credit_card_display = f"`{escape_markdown_v2(user.credit_card_number)}`"
+        if db_user.credit_card_number:
+            credit_card_display = f"`{escape_markdown_v2(db_user.credit_card_number)}`"
 
-        # Convert created_at to Shamsi for display
-        created_at_shamsi = format_gregorian_date_to_shamsi(user.created_at)
-        # Get time part separately if needed (Shamsi conversion only done for date part)
-        time_str = user.created_at.strftime('%H:%M') if user.created_at else ""
+        created_at_shamsi = format_gregorian_date_to_shamsi(db_user.created_at)
+        time_str = db_user.created_at.strftime('%H:%M') if db_user.created_at else ""
 
         user_info_parts = [
-            f"*اطلاعات کاربر: {user.telegram_id}*",
-            f"نام کاربری: @{escape_markdown_v2(user.username)}" if user.username else "نام کاربری: ندارد",
-            f"نام: {escape_markdown_v2(user.first_name)}",
-            f"نام خانوادگی: {escape_markdown_v2(user.last_name)}" if user.last_name else "نام خانوادگی: ندارد",
-            f"شماره دانشجویی: `{escape_markdown_v2(user.education_number)}`" if user.education_number else "شماره دانشجویی: ثبت نشده",
-            f"شماره ملی: `{escape_markdown_v2(user.identity_number)}`" if user.identity_number else "شماره ملی: ثبت نشده",
-            f"شماره تماس: `{escape_markdown_v2(user.phone_number)}`" if user.phone_number else "شماره تماس: ثبت نشده",
+            f"*اطلاعات کاربر: {db_user.telegram_id}*",
+            f"نام کاربری: @{escape_markdown_v2(db_user.username)}" if db_user.username else "نام کاربری: ندارد",
+            f"نام: {escape_markdown_v2(db_user.first_name)}",
+            f"نام خانوادگی: {escape_markdown_v2(db_user.last_name)}" if db_user.last_name else "نام خانوادگی: ندارد",
+            f"شماره دانشجویی: `{escape_markdown_v2(db_user.education_number)}`" if db_user.education_number else "شماره دانشجویی: ثبت نشده",
+            f"شماره ملی: `{escape_markdown_v2(db_user.identity_number)}`" if db_user.identity_number else "شماره ملی: ثبت نشده",
+            f"شماره تماس: `{escape_markdown_v2(db_user.phone_number)}`" if db_user.phone_number else "شماره تماس: ثبت نشده",
             f"شماره کارت: {credit_card_display}",
-            f"تایید شده: {'✅' if user.is_verified else '❌'}",
-            f"ادمین: {'✅' if user.is_admin else '❌'}",
-            f"فعال: {'✅' if user.is_active else '❌'}",
+            f"تایید شده: {'✅' if db_user.is_verified else '❌'}",
+            f"ادمین: {'✅' if db_user.is_admin else '❌'}",
+            f"فعال: {'✅' if db_user.is_active else '❌'}",
             f"تاریخ عضویت: {created_at_shamsi} {escape_markdown_v2(time_str)}",
-            f"تعداد آگهی‌های فروش: {len(user.listings) if user.listings else 0}",
-            f"تعداد خریدها: {len(user.purchases) if user.purchases else 0}",
+            f"تعداد آگهی‌های فروش: {len(db_user.listings) if db_user.listings else 0}", # Assumes listings are loaded
+            f"تعداد خریدها: {len(db_user.purchases) if db_user.purchases else 0}", # Assumes purchases are loaded
         ]
         await message.reply_text("\n".join(user_info_parts), parse_mode=ParseMode.MARKDOWN_V2)
     else:
-        await message.reply_text(f"کاربر با آیدی تلگرام {target_user_tg_id} یافت نشد\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        await message.reply_text(
+            f"کاربر با شناسه '{escape_markdown_v2(identifier)}' یافت نشد\\.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
 
 async def _send_list_users_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
     query = update.callback_query

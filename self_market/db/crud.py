@@ -171,6 +171,20 @@ async def get_user_details_for_admin(db: AsyncSession, target_user_telegram_id: 
     # Using get_user_by_telegram_id with load_listings=True to get comprehensive details
     return await get_user_by_telegram_id(db, target_user_telegram_id, load_listings=True)
 
+async def get_user_by_username_for_admin(db: AsyncSession, username: str) -> models.User | None:
+    """
+    Fetches a user by their username for admin viewing, including listings and purchases.
+    Username search is case-insensitive.
+    """
+    logger.debug(f"Admin fetching details for user with username: @{username}")
+    stmt = select(models.User).where(
+        func.lower(models.User.username) == func.lower(username) # Case-insensitive search
+    ).options(
+        selectinload(models.User.listings),
+        selectinload(models.User.purchases)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
 
 async def get_or_create_user_and_update_info(db: AsyncSession, telegram_user: TelegramUser) -> models.User:
     """
