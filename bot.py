@@ -339,9 +339,7 @@ class TelegramBot:
                     listen=listen_ip,
                     port=listen_port,
                     secret_token=secret_token,
-                    webhook_url=webhook_url,
-                    ssl_certfile=cert_path if cert_path and key_path else None,
-                    ssl_keyfile=key_path if cert_path and key_path else None,
+                    webhook_url=webhook_url  # This helps PTB determine the path for its internal router
                 )
                 logger.info(f"Bot is listening for webhooks on {listen_ip}:{listen_port} at path {url_path}. Press Ctrl+C to stop.")
 

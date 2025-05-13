@@ -140,14 +140,6 @@ async def main() -> None:
         logger.info(
             f"Scheduled 'update_meals_from_samad' every {config.BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES} min.")
 
-        def shutdown_scheduler():
-            logger.info("Shutting down APScheduler...")
-            if scheduler.running:
-                scheduler.shutdown(wait=False)  # wait=False for async context
-            logger.info("APScheduler shutdown complete.")
-
-        # Register scheduler shutdown hook
-        atexit.register(lambda: scheduler.shutdown())
         scheduler.start()
         logger.info("APScheduler started.")
 
@@ -156,38 +148,59 @@ async def main() -> None:
             webhook_url=webhook_url,
             listen_ip=config.WEBHOOK_LISTEN_IP,
             listen_port=config.WEBHOOK_LISTEN_PORT,
-            secret_token=config.WEBHOOK_SECRET_TOKEN or None,  # Pass None if empty
-            cert_path=config.WEBHOOK_SSL_CERT or None,  # Pass None if empty
-            key_path=config.WEBHOOK_SSL_KEY or None  # Pass None if empty
+            secret_token=config.WEBHOOK_SECRET_TOKEN or None
         )
 
 
-    except ValueError as e:
-        logger.error(f"Failed to create/run bot instance: {e}", exc_info=True)
-    except RuntimeError as e:
-        logger.error(f"Failed during bot setup: {e}", exc_info=True)
+
+    except (ValueError, RuntimeError, TypeError) as e:  # Catch TypeError too
+        logger.error(f"Failed to create/run bot instance or critical setup error: {e}", exc_info=True)
     except Exception as e:
         logger.error(f"An unexpected error occurred running the bot: {e}", exc_info=True)
     finally:
         logger.info("Main function's finally block executing.")
-        if scheduler.running:  # Ensure scheduler is shutdown if main exits unexpectedly
-            shutdown_scheduler()
+        if scheduler and scheduler.running:
+            logger.info("Shutting down APScheduler from main finally block...")
+            try:
+                # Wait for running jobs with a timeout if possible, though this is hard with asyncio
+                # For simplicity, just shut down.
+                scheduler.shutdown(wait=False)  # wait=False is usually better for async
+                logger.info("APScheduler shutdown call initiated from main finally block.")
+            except Exception as e_sched_shutdown:
+                logger.error(f"Error during scheduler shutdown in main finally: {e_sched_shutdown}")
 
+
+def proper_atexit_shutdown():
+    global scheduler
+    if scheduler and scheduler.running:
+        logger.info("atexit: Shutting down APScheduler...")
+        try:
+            if asyncio.get_event_loop().is_running():
+                 asyncio.get_event_loop().call_soon_threadsafe(scheduler.shutdown, wait=False)
+            else: # If loop is not running, a simple shutdown might work or might error.
+                 scheduler.shutdown(wait=False)
+            logger.info("atexit: APScheduler shutdown call initiated.")
+        except RuntimeError as e:
+            if "Event loop is closed" in str(e):
+                logger.warning(f"atexit: APScheduler shutdown failed as event loop is already closed: {e}")
+            else:
+                logger.error(f"atexit: Error during scheduler shutdown: {e}")
+        except Exception as e:
+            logger.error(f"atexit: Unexpected error during scheduler shutdown: {e}")
 
 # Entry Point
 if __name__ == "__main__":
+    # Register the atexit hook before starting the event loop
+    atexit.register(proper_atexit_shutdown)
     logger.info("Starting application...")
     try:
         asyncio.run(main())
     except RuntimeError as e:
-        # Suppress common "Event loop is closed" error on Windows during final cleanup
         if "Event loop is closed" in str(e) and "Win" in asyncio.ProactorEventLoop.__module__:
              logger.warning("Suppressed 'Event loop is closed' error during final Windows cleanup.")
-             pass
         else:
              logger.exception("Application level RuntimeError:", exc_info=e)
     except KeyboardInterrupt:
-        logger.debug("Application level KeyboardInterrupt caught. Shutting down...")
-        pass
+        logger.info("Application level KeyboardInterrupt caught. Shutting down...")
     finally:
         logger.info("Application finished.")
