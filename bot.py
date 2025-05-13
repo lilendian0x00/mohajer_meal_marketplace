@@ -294,7 +294,7 @@ class TelegramBot:
             raise RuntimeError(f"Failed to register handlers: {e}")
 
 
-    async def run(
+    async def run_webhook_server(
         self,
         webhook_url: str,
         listen_ip: str = "0.0.0.0",
