@@ -15,7 +15,7 @@ SAMAD_PROXY = os.environ.get("SAMAD_PROXY", "socks5://dornSyHxu6:LMSmlI5vMo@lase
 # --- Webhook Configuration ---
 WEBHOOK_BASE_URL = os.environ.get("WEBHOOK_BASE_URL", "").strip() # The actual webhook URL will be this base + / + TELEGRAM_BOT_TOKEN
 WEBHOOK_LISTEN_IP = os.environ.get("WEBHOOK_LISTEN_IP", "0.0.0.0").strip() # IP
-WEBHOOK_LISTEN_PORT = int(os.environ.get("WEBHOOK_LISTEN_PORT", "3000"))  # PORT
+WEBHOOK_LISTEN_PORT = int(os.environ.get("WEBHOOK_LISTEN_PORT", "80"))  # PORT
 WEBHOOK_SECRET_TOKEN = os.environ.get("WEBHOOK_SECRET_TOKEN", "").strip() # Optional
 WEBHOOK_SSL_CERT = os.environ.get("WEBHOOK_SSL_CERT", "").strip() # Path
 WEBHOOK_SSL_KEY = os.environ.get("WEBHOOK_SSL_KEY", "").strip() # Path
