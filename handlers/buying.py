@@ -141,11 +141,12 @@ async def handle_buy_food(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Check Verification Status
     try:
         async with get_db_session() as db_session:
-            db_user = await crud.get_user_by_telegram_id(db_session, user.id)
-            if not db_user:
-                 logger.error(f"User {user.id} not found in DB during buy food.")
-                 await message.reply_text("خطا: اطلاعات کاربری شما یافت نشد. لطفا /start بزنید.")
-                 return
+            db_user = await crud.get_or_create_user_and_update_info(db_session, user)
+
+            # if not db_user:
+            #      logger.error(f"User {user.id} not found in DB during buy food.")
+            #      await message.reply_text("خطا: اطلاعات کاربری شما یافت نشد. لطفا /start بزنید.")
+            #      return
             if not db_user.is_verified:
                 logger.warning(f"Unverified user {user.id} attempted action: buy food")
                 await message.reply_text("برای خرید غذا، ابتدا باید فرآیند اعتبارسنجی را با دستور /start کامل کنید.")

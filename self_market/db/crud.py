@@ -41,35 +41,66 @@ async def get_user_details_for_admin(db: AsyncSession, target_user_telegram_id: 
     return await get_user_by_telegram_id(db, target_user_telegram_id, load_listings=True)
 
 
-async def get_or_create_user(db: AsyncSession, telegram_user: TelegramUser) -> models.User:
-    """Gets an existing user or creates a new one if they don't exist."""
+async def get_or_create_user_and_update_info(db: AsyncSession, telegram_user: TelegramUser) -> models.User:
+    """
+    Gets an existing user or creates a new one.
+    Always checks and updates username, first_name, and last_name if they have changed.
+    """
     db_user = await get_user_by_telegram_id(db, telegram_user.id)
+    needs_commit = False
+
     if db_user:
-        needs_update = False
+        # User exists, check for info updates
         if db_user.username != telegram_user.username:
+            logger.debug(f"Updating username for TG_ID {telegram_user.id}: '{db_user.username}' -> '{telegram_user.username}'")
             db_user.username = telegram_user.username
-            needs_update = True
+            needs_commit = True
         if db_user.first_name != telegram_user.first_name:
+            logger.debug(f"Updating first_name for TG_ID {telegram_user.id}: '{db_user.first_name}' -> '{telegram_user.first_name}'")
             db_user.first_name = telegram_user.first_name
-            needs_update = True
-        if needs_update:
-             await db.commit()
-             await db.refresh(db_user)
+            needs_commit = True
+        if db_user.last_name != telegram_user.last_name: # Also check last_name
+            logger.debug(f"Updating last_name for TG_ID {telegram_user.id}: '{db_user.last_name}' -> '{telegram_user.last_name}'")
+            db_user.last_name = telegram_user.last_name
+            needs_commit = True
+
+        if needs_commit:
+            try:
+                db.add(db_user) # Ensure it's in the session if it became detached or for good measure
+                await db.commit()
+                await db.refresh(db_user)
+                logger.info(f"User info updated in DB for TG_ID: {telegram_user.id}")
+            except Exception as e:
+                await db.rollback()
+                logger.error(f"Error committing user info update for TG_ID {telegram_user.id}: {e}", exc_info=True)
+                # db_user object might be stale here, but it's better than raising and potentially losing original user object
         return db_user
     else:
-        new_user = models.User( # Uses models.User correctly
+        # User does not exist, create them
+        logger.info(f"Creating new user for TG_ID: {telegram_user.id}, Username: {telegram_user.username}")
+        new_user = models.User(
             telegram_id=telegram_user.id,
             username=telegram_user.username,
             first_name=telegram_user.first_name,
             last_name=telegram_user.last_name,
-            is_verified=False,  # Default, will be set by verification flow
-            is_active=True,
+            is_verified=False, # Default, will be set by verification flow
+            is_active=True,    # Default new users to active
         )
-        db.add(new_user)
-        await db.commit()
-        await db.refresh(new_user)
-        logger.info(f"Created new user in DB: {new_user.username} (ID: {new_user.telegram_id})")
-        return new_user
+        try:
+            db.add(new_user)
+            await db.commit()
+            await db.refresh(new_user)
+            logger.info(f"Created new user in DB: TG_ID: {new_user.telegram_id}")
+            return new_user
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Error creating new user for TG_ID {telegram_user.id}: {e}", exc_info=True)
+            # If creation fails, we can't return a user object.
+            # This is a more critical error, consider how to handle.
+            # For now, re-raise or return None based on desired behavior.
+            # Returning None might be problematic for callers expecting a User object.
+            # Perhaps raise a specific custom exception.
+            raise  # Re-raising for now to make it visible.
 
 
 async def set_user_admin_state(db: AsyncSession, user_telegram_id: int, is_admin: bool) -> models.User | None:

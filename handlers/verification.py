@@ -32,18 +32,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | Non
         return ConversationHandler.END
 
     logger.info(f"/start command received from user_id: {telegram_user.id}")
+    db_user_obj: models.User | None = None  # Initialize
 
-    db_user: models.User | None = None
     try:
         async with get_db_session() as db_session:
-            db_user = await crud.get_or_create_user(db_session, telegram_user)
-            logger.info(f"User {db_user.username} (TG_ID: {db_user.telegram_id}) processed. Verified: {db_user.is_verified}")
+            db_user_obj = await crud.get_or_create_user_and_update_info(db_session, telegram_user)
+            logger.info(f"User {db_user_obj.username} (TG_ID: {db_user_obj.telegram_id}) processed. Verified: {db_user_obj.is_verified}")
     except Exception as e:
         logger.error(f"Error processing /start user DB interaction for {telegram_user.id}: {e}", exc_info=True)
         await message.reply_text("ببخشید، مشکلی در پردازش پروفایل شما پیش آمد. لطفا دوباره امتحان کنید.")
         return ConversationHandler.END
 
-    if not db_user:
+    if not db_user_obj:
          logger.error(f"DB user object is None after get_or_create for TG ID {telegram_user.id}, ending.")
          await message.reply_text("خطای داخلی رخ داد، لطفا بعدا تلاش کنید.")
          return ConversationHandler.END
@@ -53,7 +53,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | Non
         telegram_user.first_name or telegram_user.username or f"کاربر {telegram_user.id}"
     )
 
-    if db_user.is_verified:
+    if db_user_obj.is_verified:
         logger.info(f"User {telegram_user.id} is already verified. Showing main menu.")
         welcome_back_greeting = f"سلام مجدد {user_display_name_escaped} عزیز\\! 👋\n\n"
 

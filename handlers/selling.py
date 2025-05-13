@@ -33,23 +33,27 @@ async def handle_sell_food(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     try:
         async with get_db_session() as db_session: # Acquire session
-            db_user = await crud.get_user_by_telegram_id(db_session, user.id)
+            # Ensure user exists and info is updated
+            db_user = await crud.get_or_create_user_and_update_info(db_session, user)
 
-            # Check Verification
-            if not db_user or not db_user.is_verified:
-                logger.warning(f"Unverified user {user.id} attempted action: sell food")
+            if not db_user:  # Should be handled by crud function raising error
+                raise Exception("User could not be fetched or created.")
+
+            # Now proceed with selling logic using db_user
+            if not db_user.is_verified:
+                logger.warning(f"Unverified user {db_user.telegram_id} attempted action: sell food")
                 reply_text = "برای فروش غذا، ابتدا اعتبارسنجی کنید (/start)."
                 # next_state remains END
             # Check Credit Card ONLY if verified
             elif not db_user.credit_card_number:
-                logger.info(f"User {user.id} attempting to sell, but CC number is missing.")
+                logger.info(f"User {db_user.telegram_id} attempting to sell, but CC number is missing.")
                 reply_text = (
                     "⚠️ برای فروش غذا و دریافت وجه، باید شماره کارت بانکی خود را ثبت کنید.\n"
                     "لطفا این کار را از طریق منوی '⚙️ تنظیمات' انجام دهید."
                 )
                 # next_state remains END
             else:
-                logger.info(f"User {user.id} is verified and has CC number. Proceeding with sell flow.")
+                logger.info(f"User {db_user.telegram_id} is verified and has CC number. Proceeding with sell flow.")
                 context.user_data['seller_db_id'] = db_user.id # Store DB ID early
 
                 cancel_button = InlineKeyboardButton("❌ لغو", callback_data=CALLBACK_CANCEL_SELL_FLOW)
