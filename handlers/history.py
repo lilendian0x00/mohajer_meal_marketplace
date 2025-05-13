@@ -3,6 +3,7 @@ import math
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from utility import format_gregorian_date_to_shamsi, escape_markdown_v2
@@ -34,8 +35,8 @@ async def handle_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     keyboard = [
         [
-            InlineKeyboardButton("🛒 خرید‌های من", callback_data='history_purchases_0'), # Start on page 0
-            InlineKeyboardButton("🏷️ فروش‌های من", callback_data='history_sales_0') # Start on page 0
+            InlineKeyboardButton("🛒 خرید‌های من", callback_data='history_purchases_0'),
+            InlineKeyboardButton("🏷️ فروش‌های من", callback_data='history_sales_0')
         ],
         [InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data='settings_back_main')] # Re-use back handler
     ]
@@ -45,8 +46,8 @@ async def handle_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         reply_markup=reply_markup
     )
 
+
 async def handle_history_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Displays a paginated view of purchase or sale history."""
     query = update.callback_query
     user = update.effective_user
     if not query or not user or not query.data:
@@ -54,11 +55,10 @@ async def handle_history_view(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await query.answer()
 
-    # Parse Callback Data
     try:
         parts = query.data.split('_')
-        history_type = parts[1] # 'purchases' or 'sales'
-        page = int(parts[2])    # Current page number
+        history_type = parts[1]
+        page = int(parts[2])
     except (IndexError, ValueError):
         logger.error(f"Invalid callback data for history view: {query.data}")
         await query.edit_message_text("خطای داخلی: دکمه نامعتبر.")
@@ -66,136 +66,142 @@ async def handle_history_view(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     logger.info(f"User {user.id} viewing history: type={history_type}, page={page}")
 
-    # Fetch Data
     listings = []
     total_count = 0
+    title = ""  # Initialize title
+    no_items_message = ""  # Initialize
     try:
         async with get_db_session() as db_session:
             if history_type == 'purchases':
                 listings, total_count = await crud.get_user_purchase_history(
                     db=db_session, user_telegram_id=user.id, page=page, page_size=HISTORY_PAGE_SIZE
                 )
-                title = "**🛒 تاریخچه خرید‌های شما**"
-                no_items_message = "سابقه خریدی برای شما ثبت نشده است."
+                title = "*🛒 تاریخچه خرید‌های شما*"  # Changed to V2 bold
+                no_items_message = escape_markdown_v2("سابقه خریدی برای شما ثبت نشده است.")
             elif history_type == 'sales':
                 listings, total_count = await crud.get_user_sale_history(
                     db=db_session, user_telegram_id=user.id, page=page, page_size=HISTORY_PAGE_SIZE
                 )
-                title = "**🏷️ تاریخچه فروش‌های شما**"
-                no_items_message = "سابقه فروشی برای شما ثبت نشده است."
+                title = "*🏷️ تاریخچه فروش‌های شما*"  # Changed to V2 bold
+                no_items_message = escape_markdown_v2("سابقه فروشی برای شما ثبت نشده است.")
             else:
                 raise ValueError("Invalid history type")
 
     except Exception as e:
-        logger.error(f"DB error fetching history for user {user.id} (type={history_type}, page={page}): {e}", exc_info=True)
+        logger.error(f"DB error fetching history for user {user.id} (type={history_type}, page={page}): {e}",
+                     exc_info=True)
         await query.edit_message_text("خطا در دریافت تاریخچه. لطفا دوباره تلاش کنید.")
         return
 
-    # Format Message
     if total_count == 0:
-        no_history_text = f"{title}\n\n{no_items_message}"  # Ensure newlines
-        # Create the back button keyboard even when there's no history
+        no_history_text = f"{title}\n\n{no_items_message}"
         inline_keyboard = [[
             InlineKeyboardButton("🔙 بازگشت به انتخاب نوع", callback_data='history_back_select')
         ]]
         reply_markup = InlineKeyboardMarkup(inline_keyboard)
-        # Send the message WITH the keyboard
         await query.edit_message_text(
             no_history_text,
             reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode=ParseMode.MARKDOWN_V2
         )
         return
 
     response_parts = [f"{title}\n\n"]
-    if not listings and page == 0: # Should be caught by total_count check, but defensive
-         response_parts.append(no_items_message)
-    else:
-        for listing in listings:
-            meal_desc = "نامشخص"
-            meal_date_str = "نامشخص"
-            if listing.meal:
-                meal_desc = listing.meal.description or meal_desc
-                if listing.meal.date:
-                    try:
-                        event_datetime_obj = listing.meal.date
-                        event_date_shamsi = format_gregorian_date_to_shamsi(event_datetime_obj)
-                        event_time_str = event_datetime_obj.strftime('%H:%M') if event_datetime_obj else ""
-                        meal_date_str = f"{event_date_shamsi} {event_time_str}".strip()
-                    except AttributeError:
-                        meal_date_str = str(listing.meal.date)
+    for listing in listings:
+        meal_desc_raw = listing.meal.description if listing.meal else "غذای نامشخص"
+        meal_date_raw = listing.meal.date if listing.meal else None
 
-            price_str = f"{listing.price:,.0f}" if listing.price is not None else "نامشخص"
-            event_date_str = "نامشخص"
-            if listing.sold_at:
-                try:
-                    event_datetime_obj = listing.sold_at
-                    event_date_shamsi = format_gregorian_date_to_shamsi(event_datetime_obj)
-                    event_time_str = event_datetime_obj.strftime('%H:%M') if event_datetime_obj else ""
-                    event_date_str = f"{event_date_shamsi} {event_time_str}".strip()
-                except AttributeError:
-                    event_date_str = str(listing.sold_at)
+        meal_desc = escape_markdown_v2(meal_desc_raw)
+        meal_date_shamsi = format_gregorian_date_to_shamsi(meal_date_raw)  # Already returns escaped or safe string
 
-            part = ""
-            if history_type == 'purchases':
-                seller_info = f"@{listing.seller.username}" if listing.seller and listing.seller.username else (listing.seller.first_name if listing.seller else "ناشناس")
-                part = (
-                    f"🗓️ تاریخ خرید: {event_date_str}\n"
-                    f"🍽️ غذا: {escape_markdown_v2(meal_desc)} ({escape_markdown_v2(meal_date_str)})\n"
-                    f"💰 قیمت: {price_str} تومان\n"
-                    f"👤 فروشنده: {seller_info}\n"
-                    f"🔢 کد آگهی: `{listing.id}`\n"
-                    f"--------------------\n"
-                )
-            elif history_type == 'sales':
-                buyer_info = f"@{listing.buyer.username}" if listing.buyer and listing.buyer.username else (listing.buyer.first_name if listing.buyer else "ناشناس")
-                part = (
-                    f"🗓️ تاریخ فروش: {escape_markdown_v2(event_date_str)}\n"
-                    f"🍽️ غذا: {escape_markdown_v2(meal_desc)} ({escape_markdown_v2(meal_date_str)})\n"
-                    f"💰 قیمت: {price_str} تومان\n"
-                    f"👤 خریدار: {buyer_info}\n"
-                    f"🔢 کد آگهی: `{listing.id}`\n"
-                    f"--------------------\n"
-                )
-            response_parts.append(part)
+        price_str_raw = f"{listing.price:,.0f}" if listing.price is not None else "نامشخص"
+        price_str = escape_markdown_v2(price_str_raw)  # Escape the formatted price
 
-    # Pagination Logic
+        sold_at_raw = listing.sold_at
+        event_date_str_display = "نامشخص"
+        if sold_at_raw:
+            event_date_shamsi = format_gregorian_date_to_shamsi(sold_at_raw)
+            event_time_str = sold_at_raw.strftime('%H:%M')
+            event_date_str_display = escape_markdown_v2(f"{event_date_shamsi} {event_time_str}".strip())
+
+        part = ""
+        if history_type == 'purchases':
+            seller_info_raw = "ناشناس"
+            if listing.seller:
+                seller_info_raw = f"@{listing.seller.username}" if listing.seller.username else listing.seller.first_name
+            seller_info = escape_markdown_v2(seller_info_raw or "ناشناس")
+            part = (
+                f"🗓️ تاریخ خرید: {event_date_str_display}\n"
+                f"🍽️ غذا: *{meal_desc}* \\({meal_date_shamsi}\\)\n"
+                f"💰 قیمت: {price_str} تومان\n"
+                f"👤 فروشنده: {seller_info}\n"
+                f"🔢 کد آگهی: `{listing.id}`\n" 
+                f"{escape_markdown_v2('--------------------')}\n"
+            )
+        elif history_type == 'sales':
+            buyer_info_raw = "ناشناس"
+            if listing.buyer:
+                buyer_info_raw = f"@{listing.buyer.username}" if listing.buyer.username else listing.buyer.first_name
+            buyer_info = escape_markdown_v2(buyer_info_raw or "ناشناس")
+            part = (
+                f"🗓️ تاریخ فروش: {event_date_str_display}\n"
+                f"🍽️ غذا: *{meal_desc}* \\({meal_date_shamsi}\\)\n"
+                f"💰 قیمت: {price_str} تومان\n"
+                f"👤 خریدار: {buyer_info}\n"
+                f"🔢 کد آگهی: `{listing.id}`\n"
+                f"{escape_markdown_v2('--------------------')}\n"
+            )
+        response_parts.append(part)
+
     total_pages = math.ceil(total_count / HISTORY_PAGE_SIZE)
     pagination_buttons = []
-    if page > 0: # Show Previous button if not on first page
+    if page > 0:
         pagination_buttons.append(
-            InlineKeyboardButton("« صفحه قبل", callback_data=f'history_{history_type}_{page-1}')
+            InlineKeyboardButton("« صفحه قبل", callback_data=f'history_{history_type}_{page - 1}')
         )
-    if total_pages > 1: # Show page number if more than one page
-         pagination_buttons.append(
-             InlineKeyboardButton(f"صفحه {page+1}/{total_pages}", callback_data='history_noop') # No operation button
-         )
-    if page < total_pages - 1: # Show Next button if not on last page
+    if total_pages > 1:
         pagination_buttons.append(
-            InlineKeyboardButton("صفحه بعد »", callback_data=f'history_{history_type}_{page+1}')
+            InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data='history_noop')
+        )
+    if page < total_pages - 1:
+        pagination_buttons.append(
+            InlineKeyboardButton("صفحه بعد »", callback_data=f'history_{history_type}_{page + 1}')
         )
 
-    # Keyboard Assembly
     inline_keyboard = []
     if pagination_buttons:
-        # Add pagination row if there are any pagination buttons
         inline_keyboard.append(pagination_buttons)
-
-    # Add Back button to go back to the selection menu (or main menu)
     inline_keyboard.append([
-         InlineKeyboardButton("🔙 بازگشت به انتخاب نوع", callback_data='history_back_select')
+        InlineKeyboardButton("🔙 بازگشت به انتخاب نوع", callback_data='history_back_select')
     ])
-
     reply_markup = InlineKeyboardMarkup(inline_keyboard)
 
     full_message = "".join(response_parts)
-    # Handle message length just in case
     if len(full_message) > 4096:
         logger.warning(f"History message for user {user.id} possibly truncated.")
-        full_message = full_message[:4090] + "\n..."
+        full_message = full_message[:4090] + escape_markdown_v2("\n...")
 
-    # Edit the original message (from handle_history or previous page)
-    await query.edit_message_text(full_message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+    try:
+        await query.edit_message_text(
+            full_message,
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=reply_markup
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.info(f"History view for user {user.id} not modified.")
+            await query.answer("صفحه تغییری نکرده است.")  # Or don't answer again if initial answer was enough
+        else:
+            # Log the full error if it's not "Message is not modified"
+            logger.error(
+                f"BadRequest editing history message for user {user.id} (V2): {e}\nMessage content: {full_message[:500]}",
+                exc_info=True)
+            await query.answer("خطا در بروزرسانی لیست.")
+    except Exception as e_edit:
+        logger.error(
+            f"Unexpected error editing history message for user {user.id} (V2): {e_edit}\nMessage content: {full_message[:500]}",
+            exc_info=True)
+        await query.answer("خطای ناشناخته در بروزرسانی.")
 
 
 
