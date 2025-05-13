@@ -19,6 +19,16 @@ from self_market import models
 logger = logging.getLogger(__name__)
 
 
+PERSIAN_DAYS_MAP = {
+    5: "شنبه",   # Saturday (datetime.weekday() == 5)
+    6: "یکشنبه", # Sunday (datetime.weekday() == 6)
+    0: "دوشنبه",  # Monday (datetime.weekday() == 0)
+    1: "سه‌شنبه", # Tuesday (datetime.weekday() == 1)
+    2: "چهارشنبه",# Wednesday (datetime.weekday() == 2)
+    3: "پنجشنبه", # Thursday (datetime.weekday() == 3)
+    4: "جمعه"     # Friday (datetime.weekday() == 4)
+}
+
 # Sell Food Conversation Handlers
 async def handle_sell_food(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | None:
     user = update.effective_user
@@ -93,95 +103,105 @@ async def receive_reservation_code(update: Update, context: ContextTypes.DEFAULT
 
     logger.info(f"User {user.id} entered reservation code: {reservation_code}")
 
+    next_state = SELL_ASK_CODE
+    reply_text = "خطا در پردازش کد رزرو."
+    reply_markup = None
+    current_parse_mode = ParseMode.MARKDOWN_V2
+
     # Check if code already listed
     try:
         async with get_db_session() as db_session:
             code_exists = await crud.check_listing_exists_by_code(db_session, reservation_code)
             if code_exists:
                 logger.warning(f"User {user.id} tried to list code '{reservation_code}' which already exists.")
-                await message.reply_text("این کد رزرو قبلا برای فروش ثبت شده است یا در حال حاضر در وضعیت فروش قرار دارد.")
-                # Clear context data if any was set for this flow before erroring out
-                if 'university_reservation_code' in context.user_data:
-                    del context.user_data['university_reservation_code']
-                return ConversationHandler.END  # End conversation if code exists
+                reply_text = escape_markdown_v2(
+                    "این کد رزرو قبلا برای فروش ثبت شده است یا در حال حاضر در وضعیت فروش قرار دارد."
+                )
+                next_state = ConversationHandler.END
+            else:
+                # Fetch available Meals for selection
+                available_meals = await crud.get_meals_for_selling(db_session)  # TODO: Maybe filter by date?
+                if not available_meals:
+                    reply_text = escape_markdown_v2(
+                        "متاسفانه در حال حاضر هیچ نوع غذایی در سیستم تعریف نشده است. لطفا با ادمین تماس بگیرید."
+                    )
+                    next_state = ConversationHandler.END
+                else:
+                    context.user_data['university_reservation_code'] = reservation_code
 
-            # Fetch available Meals for selection
-            available_meals = await crud.get_meals_for_selling(db_session)  # TODO: Maybe filter by date?
-            if not available_meals:
-                await message.reply_text(
-                    "متاسفانه در حال حاضر هیچ نوع غذایی در سیستم تعریف نشده است. لطفا با ادمین تماس بگیرید.")
-                return ConversationHandler.END
+                    # Main instruction text, escaped
+                    instruction_text = escape_markdown_v2(
+                        "لطفا نوع غذای مربوط به این کد را از لیست زیر انتخاب کنید:")
+                    message_parts = [instruction_text, "\n"]  # Add a newline after instruction
+                    meal_details_for_text_md = []
 
-            # Store code and prepare meal selection buttons
-            context.user_data['university_reservation_code'] = reservation_code
+                    for index, meal in enumerate(available_meals):
+                        meal_date_obj = meal.date  # This should be a datetime.date object
+                        shamsi_date_str = format_gregorian_date_to_shamsi(meal_date_obj)
+                        persian_day_name = "روز نامشخص"  # Default
+                        if meal_date_obj:
+                            day_of_week_int = meal_date_obj.weekday()  # Monday is 0 and Sunday is 6
+                            persian_day_name = PERSIAN_DAYS_MAP.get(day_of_week_int, "روز نامشخص")
 
-            # Main instruction text, escaped
-            instruction_text = escape_markdown_v2(
-                "لطفا نوع غذای مربوط به این کد را از لیست زیر انتخاب کنید:")
-            message_parts = [instruction_text, "\n"]  # Add a newline after instruction
+                        meal_type_display = meal.meal_type
 
-            meal_details_for_text_md = []
-            for index, meal in enumerate(available_meals):
-                # meal_date_str = meal.date.strftime('%Y-%m-%d') if meal.date else "نامشخص"
-                meal_date_str = format_gregorian_date_to_shamsi(meal.date)
-                # Assuming meal.meal_type is user-friendly (e.g., 'ناهار', 'شام').
-                # If it's 'lunch'/'dinner', you might want a mapping:
-                # persian_meal_type_map = {'lunch': 'ناهار', 'dinner': 'شام'}
-                # meal_type_display = persian_meal_type_map.get(meal.meal_type.lower(), meal.meal_type)
-                meal_type_display = meal.meal_type  # Use directly if already Persian
+                        # Escape dynamic content from the meal object
+                        escaped_description = escape_markdown_v2(meal.description or 'غذای نامشخص')
+                        escaped_meal_type = escape_markdown_v2(meal_type_display)
+                        escaped_shamsi_date = escape_markdown_v2(shamsi_date_str)
+                        escaped_persian_day_name = escape_markdown_v2(persian_day_name)
 
-                # Escape dynamic content from the meal object
-                escaped_description = escape_markdown_v2(meal.description or 'غذای نامشخص')
-                escaped_meal_type = escape_markdown_v2(meal_type_display)
-                escaped_meal_date = escape_markdown_v2(meal_date_str)
+                        # Format: "1\. Escaped Description \(Escaped Type \- Escaped Date\)"
+                        meal_info = (
+                            f"{index + 1}\\. {escaped_description} "
+                            f"\\({escaped_meal_type} \\- {escaped_persian_day_name}، {escaped_shamsi_date}\\)"
+                        )
+                        meal_details_for_text_md.append(meal_info)
 
-                # Format: "1\. Escaped Description \(Escaped Type \- Escaped Date\)"
-                # The number, dot, and space make it a list item. Escape the dot.
-                meal_info = f"{index + 1}\\. {escaped_description} \\({escaped_meal_type} \\- {escaped_meal_date}\\)"
-                meal_details_for_text_md.append(meal_info)
+                    message_parts.append("\n".join(meal_details_for_text_md))  # Each meal on a new line
+                    reply_text = "\n".join(message_parts)
 
-            message_parts.append("\n".join(meal_details_for_text_md))  # Each meal on a new line
-            final_message_text_md = "\n".join(message_parts)
-
-            # Build the inline keyboard
-            meal_buttons_rows = []
-            current_row = []
-            # Consider how many buttons fit well per row (e.g., 2 or 3)
-            # For "انتخاب گزینه X", 2 or 3 can work. Let's try 3 for potentially shorter rows overall.
-            max_buttons_per_row = 3
-
-            for index, meal in enumerate(available_meals):
-                # Shorter, referential button text in Persian
-                button_text = f"انتخاب گزینه {index + 1}"  # "Select option X"
-                callback_data = f"sell_select_meal_{meal.id}"  # Callback still uses meal_id
-                current_row.append(InlineKeyboardButton(button_text, callback_data=callback_data))
-
-                if len(current_row) == max_buttons_per_row:
-                    meal_buttons_rows.append(current_row)
+                    # Build the inline keyboard
+                    meal_buttons_rows = []
                     current_row = []
+                    max_buttons_per_row = 3
+                    for index, meal in enumerate(available_meals):
+                        # Shorter, referential button text in Persian
+                        button_text = f"انتخاب گزینه {index + 1}"  # "Select option X"
+                        callback_data = f"sell_select_meal_{meal.id}"  # Callback still uses meal_id
+                        current_row.append(InlineKeyboardButton(button_text, callback_data=callback_data))
+                        if len(current_row) == max_buttons_per_row:
+                            meal_buttons_rows.append(current_row)
+                            current_row = []
 
-            if current_row:  # Add any remaining buttons in the last row
-                meal_buttons_rows.append(current_row)
+                    if current_row:  # Add any remaining buttons in the last row
+                        meal_buttons_rows.append(current_row)
+                    meal_buttons_rows.append(
+                        [InlineKeyboardButton("❌ لغو مراحل فروش", callback_data=CALLBACK_CANCEL_SELL_FLOW)])
+                    reply_markup = InlineKeyboardMarkup(meal_buttons_rows)
 
-            # Add the cancel button in its own row for clarity
-            # Using a more descriptive cancel text for this specific context
-            meal_buttons_rows.append(
-                [InlineKeyboardButton("❌ لغو مراحل فروش", callback_data=CALLBACK_CANCEL_SELL_FLOW)])
-
-            reply_markup = InlineKeyboardMarkup(meal_buttons_rows)
-
-            await message.reply_text(
-                final_message_text_md,
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN_V2
-            )
-
-            return SELL_ASK_MEAL  # Move to state waiting for meal selection
+                    next_state = SELL_ASK_MEAL
 
     except Exception as e:
         logger.error(f"Error processing reservation code '{reservation_code}' for user {user.id}: {e}", exc_info=True)
-        await message.reply_text("خطا در بررسی کد رزرو. لطفا دوباره تلاش کنید یا /cancel را بزنید.")
-        return SELL_ASK_CODE  # Ask again
+        reply_text = escape_markdown_v2("خطا در بررسی کد رزرو. لطفا دوباره تلاش کنید یا /cancel را بزنید.")
+        next_state = SELL_ASK_CODE
+        context.user_data.pop('university_reservation_code', None)
+
+    try:
+        await message.reply_text(
+            reply_text,
+            reply_markup=reply_markup,
+            parse_mode=current_parse_mode
+        )
+    except Exception as send_err:
+        logger.error(f"Failed to send reply in receive_reservation_code: {send_err}")
+
+    if next_state == ConversationHandler.END:
+        context.user_data.clear()
+
+    return next_state
+
 
 
 async def receive_meal_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

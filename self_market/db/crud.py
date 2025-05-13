@@ -20,7 +20,7 @@ async def get_user_by_telegram_id(db: AsyncSession, telegram_id: int, load_listi
     # Access models like models.User, models.Listing, etc.
     stmt = select(models.User).filter(models.User.telegram_id == telegram_id)
     if load_listings: stmt = stmt.options(selectinload(models.User.listings), selectinload(models.User.purchases))
-    result = await db.execute(stmt);
+    result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 

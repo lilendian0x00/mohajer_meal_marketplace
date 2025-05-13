@@ -6,6 +6,7 @@ from telegram.error import Forbidden, BadRequest
 from telegram.ext import ContextTypes
 from telegram.helpers import escape_markdown
 
+from . import PERSIAN_DAYS_MAP
 from .common import (
     CALLBACK_BUY_REFRESH, CALLBACK_BUYER_CANCEL_PENDING,
     CALLBACK_SELLER_REJECT_PENDING, get_main_menu_keyboard
@@ -30,11 +31,11 @@ async def _generate_buy_food_response(db_session: crud.AsyncSession) -> tuple[st
     """
     available_listings = await crud.get_available_listings(db_session) # Should load seller+meal
 
-    title = "🛒 **لیست غذاهای موجود برای خرید:**\n\n"
+    title = utility.escape_markdown_v2("🛒 لیست غذاهای موجود برای خرید:\n\n")
     refresh_button = InlineKeyboardButton("🔄 بروزرسانی لیست", callback_data=CALLBACK_BUY_REFRESH)
 
     if not available_listings:
-        message_text = title + "در حال حاضر هیچ غذایی برای فروش ثبت نشده است\\."
+        message_text = title + utility.escape_markdown_v2("در حال حاضر هیچ غذایی برای فروش ثبت نشده است.")
         # Still include Refresh button even if no listings
         reply_markup = InlineKeyboardMarkup([[refresh_button]])
         return message_text, reply_markup
@@ -44,24 +45,25 @@ async def _generate_buy_food_response(db_session: crud.AsyncSession) -> tuple[st
 
     for listing in available_listings:
         meal_desc_raw = "غذای نامشخص"
-        meal_date_str_raw = "نامشخص"
-        meal_type_raw = "نامشخص"
+        shamsi_date_str_raw = "تاریخ نامشخص"
+        persian_day_name_raw = "روز نامشخص"
+        meal_type_raw = "نوع نامشخص"
 
         if listing.meal:
             meal = listing.meal
             meal_desc_raw = meal.description or meal_desc_raw
             meal_type_raw = meal.meal_type or meal_type_raw
             if meal.date:
-                try:
-                    #meal_date_str_raw = meal.date.strftime('%Y-%m-%d')
-                    meal_date_str_raw = utility.format_gregorian_date_to_shamsi(meal.date)
-                except AttributeError:
-                    meal_date_str_raw = str(meal.date)  # Fallback if strftime fails or date is already string
+                meal_date_obj = meal.date
+                shamsi_date_str_raw = utility.format_gregorian_date_to_shamsi(meal_date_obj)
+                day_of_week_int = meal_date_obj.weekday()
+                persian_day_name_raw = PERSIAN_DAYS_MAP.get(day_of_week_int, "روز نامشخص")
 
         # Escape user-generated content
-        meal_desc = escape_markdown(meal_desc_raw, version=2)
-        meal_type = escape_markdown(meal_type_raw, version=2)
-        meal_date_str = escape_markdown(meal_date_str_raw, version=2)
+        meal_desc = utility.escape_markdown_v2(meal_desc_raw)
+        meal_type = utility.escape_markdown_v2(meal_type_raw)
+        shamsi_date_str = utility.escape_markdown_v2(shamsi_date_str_raw)
+        persian_day_name = utility.escape_markdown_v2(persian_day_name_raw)
 
         # Escape seller name for Markdown V2 compatibility if needed, or use regular Markdown
         seller_name_raw_display = "ناشناس"
@@ -69,60 +71,57 @@ async def _generate_buy_food_response(db_session: crud.AsyncSession) -> tuple[st
             seller_name_raw_display = listing.seller.first_name
 
         # Prepare the display part of the link, escaping it
-        escaped_seller_display_name = escape_markdown(seller_name_raw_display, version=2)
+        escaped_seller_display_name = utility.escape_markdown_v2(seller_name_raw_display)
 
-        seller_name = "ناشناس"
-
+        seller_name_md = utility.escape_markdown_v2("ناشناس")  # Default if no seller info
         if listing.seller:
             seller_telegram_id = listing.seller.telegram_id
-
             if listing.seller.username:
                 username_display_text = f"@{listing.seller.username}"
-                escaped_link_text = escape_markdown(username_display_text, version=2)
-                # The username in the URL itself does not need Markdown escaping
-                seller_name = f"[{escaped_link_text}](https://t.me/{listing.seller.username})"
+                escaped_link_text = utility.escape_markdown_v2(username_display_text)
+                seller_name_md = f"[{escaped_link_text}](https://t.me/{listing.seller.username})"
             else:
-                # Fallback for first_name if it's None or empty
                 first_name_raw = listing.seller.first_name if listing.seller.first_name else "ناشناس"
-
-                # Construct the full display text for the link
-                link_text_raw = f"{first_name_raw} (ID: {seller_telegram_id})"
-                escaped_link_text = escape_markdown(link_text_raw, version=2)
-                seller_name = f"[{escaped_link_text}](tg://user?id={seller_telegram_id})"
+                link_text_raw = f"{first_name_raw} (ID: {seller_telegram_id})"  # Keep (ID: ...) unescaped inside link text for now
+                escaped_link_text = utility.escape_markdown_v2(link_text_raw)
+                seller_name_md = f"[{escaped_link_text}](tg://user?id={seller_telegram_id})"
 
 
         price_str_raw = f"{listing.price:,.0f}" if listing.price is not None else "نامشخص"
-        price_str = escape_markdown(price_str_raw, version=2)
+        price_str = utility.escape_markdown_v2(price_str_raw)
 
         part = (
-            f"🍽️ *{meal_desc}* \\({meal_type} \\- {meal_date_str}\\)\n"
-            f"👤 فروشنده: {seller_name}\n"
+            f"🍽️ *{meal_desc}* \\({meal_type} \\- {persian_day_name}، {shamsi_date_str}\\)\n"
+            f"👤 فروشنده: {seller_name_md}\n"
             f"💰 قیمت: {price_str} تومان\n"
-            f"🆔 شماره آگهی: `{listing.id}`\n"  # listing.id is an int, doesn't need escaping inside backticks
+            f"🆔 شماره آگهی: `{listing.id}`\n"
         )
         response_parts.append(part)
 
-        # Create the buy button for this listing
         inline_buttons.append([
             InlineKeyboardButton(
-                f"خرید آگهی {listing.id} ({price_str} تومان)",
+                f"خرید آگهی {listing.id} ({price_str_raw} تومان)",
                 callback_data=f'buy_listing_{listing.id}'
             )
         ])
         # Add a separator after each listing's details
-        response_parts.append(escape_markdown("--------------------", version=2) + "\n")
+        response_parts.append(utility.escape_markdown_v2("--------------------") + "\n")
 
     # Add the refresh button as the last row
     inline_buttons.append([refresh_button])
-
     full_message = "".join(response_parts)
     reply_markup = InlineKeyboardMarkup(inline_buttons)
 
     # Handle potential length issues (optional refinement)
     if len(full_message) > 4096:
         logger.warning("Generated buy food list message exceeds 4096 chars, might be truncated by Telegram.")
-        # Simple truncation:
-        full_message = full_message[:4090] + "\n... (لیست خلاصه شد)"
+        # Smart truncation
+        truncated_message = full_message[:4000]  # Leave some space for ellipsis and note
+        # Find last complete line
+        last_newline = truncated_message.rfind('\n')
+        if last_newline != -1:
+            truncated_message = truncated_message[:last_newline]
+        full_message = truncated_message + "\n" + utility.escape_markdown_v2("...\n(لیست برای نمایش خلاصه شد)")
 
     return full_message, reply_markup
 
