@@ -38,13 +38,14 @@ async def get_all_sold_listings(db: AsyncSession, page: int = 0, page_size: int 
     stmt = select(models.Listing).where(
         models.Listing.status == models.ListingStatus.SOLD
     ).options(
-        # Eager load related data needed for display
         joinedload(models.Listing.meal),
-        joinedload(models.Listing.seller).load_only(models.User.telegram_id, models.User.username, models.User.first_name),
-        joinedload(models.Listing.buyer).load_only(models.User.telegram_id, models.User.username, models.User.first_name)
+        joinedload(models.Listing.seller).load_only(models.User.telegram_id, models.User.username,
+                                                    models.User.first_name),
+        joinedload(models.Listing.buyer).load_only(models.User.telegram_id, models.User.username,
+                                                   models.User.first_name)
     ).order_by(
-        models.Listing.sold_at.desc() # Newest sales first
-    ).offset(offset).limit(page_size)
+        models.Listing.sold_at.desc()
+    ).offset(offset).limit(page_size).distinct()
 
     result = await db.execute(stmt)
     listings = result.scalars().all()
@@ -84,11 +85,11 @@ async def get_sold_listings_by_seller(db: AsyncSession, seller_telegram_id: int,
         models.Listing.status == models.ListingStatus.SOLD
     ).options(
         joinedload(models.Listing.meal),
-        joinedload(models.Listing.buyer).load_only(models.User.telegram_id, models.User.username, models.User.first_name)
-        # Seller is already known
+        joinedload(models.Listing.buyer).load_only(models.User.telegram_id, models.User.username,
+                                                   models.User.first_name)
     ).order_by(
-        models.Listing.sold_at.desc() # Newest sales first
-    ).offset(offset).limit(page_size)
+        models.Listing.sold_at.desc()
+    ).offset(offset).limit(page_size).distinct()
 
     result = await db.execute(stmt)
     listings = result.scalars().all()
