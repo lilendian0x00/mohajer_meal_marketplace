@@ -12,9 +12,17 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "./self_market.db").strip()
 BOT_PERSISTENCE_FILEPATH = os.environ.get("BOT_PERSISTENCE_FILEPATH", "./bot_persistence").strip()
 SAMAD_PROXY = os.environ.get("SAMAD_PROXY", "socks5://dornSyHxu6:LMSmlI5vMo@laser.kafsabtaheri.com:13865")
 
+# --- Webhook Configuration ---
+WEBHOOK_BASE_URL = os.environ.get("WEBHOOK_BASE_URL", "").strip() # The actual webhook URL will be this base + / + TELEGRAM_BOT_TOKEN
+WEBHOOK_LISTEN_IP = os.environ.get("WEBHOOK_LISTEN_IP", "0.0.0.0").strip() # IP
+WEBHOOK_LISTEN_PORT = int(os.environ.get("WEBHOOK_LISTEN_PORT", "8000"))  # PORT
+WEBHOOK_SECRET_TOKEN = os.environ.get("WEBHOOK_SECRET_TOKEN", "").strip() # Optional
+WEBHOOK_SSL_CERT = os.environ.get("WEBHOOK_SSL_CERT", "").strip() # Path
+WEBHOOK_SSL_KEY = os.environ.get("WEBHOOK_SSL_KEY", "").strip() # Path
+
+
 # --- Admin Configuration ---
-# Comma-separated list of Telegram User IDs for admins
-ADMIN_TELEGRAM_IDS_STR = os.environ.get("ADMIN_TELEGRAM_IDS", "")
+ADMIN_TELEGRAM_IDS_STR = os.environ.get("ADMIN_TELEGRAM_IDS", "")  # Comma-separated
 ADMIN_TELEGRAM_IDS: list[int] = []
 if ADMIN_TELEGRAM_IDS_STR:
     try:
@@ -28,18 +36,12 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 # --- Application Logic Constants ---
-# How many items to show per page in history view
-HISTORY_PAGE_SIZE: int = 5
-
-# How long (in minutes) a listing can stay in AWAITING_CONFIRMATION before timeout
-PENDING_TIMEOUT_MINUTES: int = int(os.environ.get("PENDING_TIMEOUT_MINUTES", "1440"))
-
+HISTORY_PAGE_SIZE: int = 5  # How many items to show per page in history view
+PENDING_TIMEOUT_MINUTES: int = int(os.environ.get("PENDING_TIMEOUT_MINUTES", "1440")) # How long (in minutes) a listing can stay in AWAITING_CONFIRMATION before timeout
 # How often (in minutes) the listing timeout is checked
 BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES: int = int(os.environ.get("LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES", "5"))
-
 # How often (in minutes) the meals are updated from the samad.app
 BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES : int = int(os.environ.get("MEALS_UPDATE_CHECK_INTERVAL_MINUTES", "720"))
-
 # Default price limit for undefined meals
 DEFAULT_PRICE_LIMIT: int = int(os.environ.get("DEFAULT_PRICE_LIMIT", "25000"))
 

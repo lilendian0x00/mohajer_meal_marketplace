@@ -97,14 +97,21 @@ async def main() -> None:
     except Exception as e:
         logger.error(f"Failed to synchronize admin permissions during startup: {e}", exc_info=True)
 
+    # Webhook Specific Checks
+    if not config.WEBHOOK_BASE_URL:
+        logger.error("FATAL: WEBHOOK_BASE_URL is not set in config. Cannot start in webhook mode.")
+        return
+
+    webhook_url = f"{config.WEBHOOK_BASE_URL.rstrip('/')}/{config.TELEGRAM_BOT_TOKEN}"
+
     # Create and Run Bot Instance
     try:
         logger.info("Creating TelegramBot instance...")
         bot_instance = TelegramBot(token=config.TELEGRAM_BOT_TOKEN)
         ptb_app = bot_instance.application
 
-        # --- Scheduler Setup ---
-        scheduler = AsyncIOScheduler(timezone="UTC")  # Use UTC or your preferred timezone
+        # Scheduler Setup
+        scheduler = AsyncIOScheduler(timezone="UTC")
 
         # Add listing timeout checker job
         scheduler.add_job(
@@ -129,23 +136,42 @@ async def main() -> None:
             kwargs={'app': ptb_app}
         )
         logger.info(
-            f"Scheduled background task 'check_pending_listings_timeout' to run every {PENDING_TIMEOUT_MINUTES} minutes.")
+            f"Scheduled 'check_pending_listings_timeout' every {config.BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES} min.")
+        logger.info(
+            f"Scheduled 'update_meals_from_samad' every {config.BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES} min.")
+
+        def shutdown_scheduler():
+            logger.info("Shutting down APScheduler...")
+            if scheduler.running:
+                scheduler.shutdown(wait=False)  # wait=False for async context
+            logger.info("APScheduler shutdown complete.")
 
         # Register scheduler shutdown hook
         atexit.register(lambda: scheduler.shutdown())
-
         scheduler.start()
         logger.info("APScheduler started.")
 
-        logger.info("Running bot instance...")
-        await bot_instance.run() # Call the async run method
+        logger.info("Running bot instance in Webhook mode...")
+        await bot_instance.run(
+            webhook_url=webhook_url,
+            listen_ip=config.WEBHOOK_LISTEN_IP,
+            listen_port=config.WEBHOOK_LISTEN_PORT,
+            secret_token=config.WEBHOOK_SECRET_TOKEN or None,  # Pass None if empty
+            cert_path=config.WEBHOOK_SSL_CERT or None,  # Pass None if empty
+            key_path=config.WEBHOOK_SSL_KEY or None  # Pass None if empty
+        )
 
-    except ValueError as e: # Catch potential token error from Bot __init__
-         logger.error(f"Failed to create bot instance: {e}")
-    except RuntimeError as e: # Catch potential handler registration error
-        logger.error(f"Failed during bot setup: {e}")
+
+    except ValueError as e:
+        logger.error(f"Failed to create/run bot instance: {e}", exc_info=True)
+    except RuntimeError as e:
+        logger.error(f"Failed during bot setup: {e}", exc_info=True)
     except Exception as e:
         logger.error(f"An unexpected error occurred running the bot: {e}", exc_info=True)
+    finally:
+        logger.info("Main function's finally block executing.")
+        if scheduler.running:  # Ensure scheduler is shutdown if main exits unexpectedly
+            shutdown_scheduler()
 
 
 # Entry Point
@@ -161,7 +187,7 @@ if __name__ == "__main__":
         else:
              logger.exception("Application level RuntimeError:", exc_info=e)
     except KeyboardInterrupt:
-        logger.debug("Application level KeyboardInterrupt caught.")
+        logger.debug("Application level KeyboardInterrupt caught. Shutting down...")
         pass
     finally:
         logger.info("Application finished.")

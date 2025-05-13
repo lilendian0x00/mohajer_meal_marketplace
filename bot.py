@@ -105,14 +105,19 @@ class TelegramBot:
         self.token = token
         builder = Application.builder().token(self.token)
 
-        persistence = PicklePersistence(filepath=config.BOT_PERSISTENCE_FILEPATH)
-        builder.persistence(persistence)
+        # Persistence setup
+        if config.BOT_PERSISTENCE_FILEPATH:  # Check if path is configured
+            try:
+                persistence = PicklePersistence(filepath=config.BOT_PERSISTENCE_FILEPATH)
+                builder.persistence(persistence)
+                logger.info(f"Persistence enabled at: {config.BOT_PERSISTENCE_FILEPATH}")
+            except Exception as e:
+                logger.error(f"Failed to initialize persistence: {e}. Continuing without persistence.")
+        else:
+            logger.info("BOT_PERSISTENCE_FILEPATH not set. Running without persistence.")
 
         self.application = builder.build()
-
-        # Register the global error handler
-        self.application.add_error_handler(ptb_error_handler)
-
+        self.application.add_error_handler(ptb_error_handler)   # Register the global error handler
         logger.info("Custom global error handler registered.")
         self._register_handlers()
 
@@ -288,32 +293,66 @@ class TelegramBot:
             raise RuntimeError(f"Failed to register handlers: {e}")
 
 
-    async def run(self) -> None:
-        """Starts the bot's polling loop and waits for termination."""
-        logger.info("Starting bot execution via TelegramBot class...")
+    async def run(
+        self,
+        webhook_url: str,
+        listen_ip: str = "0.0.0.0",
+        listen_port: int = 8000,    # Default port
+        secret_token: str | None = None, # "X-Telegram-Bot-Api-Secret-Token" header
+        cert_path: str | None = None,    # SSL certificate (public key)
+        key_path: str | None = None      # SSL private key
+    ) -> None:
+        """Starts the bot to listen for webhooks."""
+        logger.info(f"Starting bot execution via Webhook to URL: {webhook_url}")
+        logger.info(f"Bot will listen on {listen_ip}:{listen_port}")
+
+        if not webhook_url.startswith("https://"):
+            logger.warning("Webhook URL does not start with https.")
+
         try:
-            # --- Run the bot using Application's async context manager ---
-            # The context manager handles initialize(), start(), stop(), shutdown().
+            # The application's context manager handles initialize() and shutdown()
             async with self.application:
-                async with self.application:
-                    await self.application.initialize()
-                    await self.application.start()
-                    await self.application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-                    logger.info("Bot is running via class. Press Ctrl+C to stop.")
-                    stop_event = asyncio.Event()
-                    await stop_event.wait() # This will wait forever unless stop_event.set() is called
+                await self.application.initialize() # Initialize handlers, persistence etc.
+
+                # Set the webhook.
+                await self.application.bot.set_webhook(
+                    url=webhook_url,
+                    allowed_updates=Update.ALL_TYPES,
+                    secret_token=secret_token,
+                    # certificate=open(cert_path, 'rb') if cert_path else None, # Only if using self-signed certs directly with PTB
+                    drop_pending_updates=True  # useful when switching to avoid processing old updates.
+                )
+                logger.info(f"Webhook set successfully to {webhook_url}")
+
+                # Start the built-in web server.
+                await self.application.start(
+                    webhook_listen=listen_ip,
+                    webhook_port=listen_port,
+                    url_path=webhook_url.split('/')[-1] if '/' in webhook_url.split('://', 1)[-1] else "",
+                    secret_token=secret_token,
+                    key=key_path, # Path to your SSL private key file
+                    cert=cert_path # Path to your SSL public certificate file
+                )
+                logger.info(f"Bot is listening for webhooks on {listen_ip}:{listen_port}. Press Ctrl+C to stop.")
+
+                # Keep the application running until it's stopped (e.g., by Ctrl+C or shutdown signal)
+                stop_event = asyncio.Event()
+                await stop_event.wait()
 
         except (KeyboardInterrupt, SystemExit):
-            logger.info("Shutdown signal received by bot class.")
+            logger.info("Shutdown signal received by bot class (Webhook mode).")
         except Exception as e:
-            logger.error(f"Error during bot execution: {e}", exc_info=True)
+            logger.error(f"Error during bot execution (Webhook mode): {e}", exc_info=True)
         finally:
-            logger.info("Bot class's run method finally block executing.")
-            # Check if updater exists and is running before trying to stop it
-            if hasattr(self.application,
-                       'updater') and self.application.updater and self.application.updater.is_running:
-                logger.info("Stopping PTB updater...")
-                await self.application.updater.stop()
-                logger.info("PTB updater stopped.")
-            # The `async with self.application` block handles application shutdown
-            logger.info("Bot class run method finished.")
+            logger.info("Bot class's run method (Webhook mode) finally block executing.")
+            # The `async with self.application` block handles application shutdown.
+            # It will also try to delete the webhook if `self.application.stop()` is called.
+            # However, explicitly deleting it can be good practice if not handled by stop().
+            if hasattr(self.application, 'bot') and self.application.bot:
+                try:
+                    logger.info("Attempting to delete webhook...")
+                    await self.application.bot.delete_webhook(drop_pending_updates=True)
+                    logger.info("Webhook deleted successfully.")
+                except Exception as e_del_wh:
+                    logger.error(f"Failed to delete webhook: {e_del_wh}")
+            logger.info("Bot class run method (Webhook mode) finished.")

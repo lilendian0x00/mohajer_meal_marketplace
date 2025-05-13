@@ -7,6 +7,9 @@ services:
     restart: unless-stopped
     network_mode: "host"
 
+    ports:
+      - "443:8000"
+
     volumes:
       # Mount a named volume to /data inside the container
       - ./mohajer-db-data:/data
