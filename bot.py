@@ -3,6 +3,7 @@ import logging
 import asyncio
 import re
 import traceback
+from urllib.parse import urlparse
 
 from telegram import Update
 from telegram.constants import ParseMode
@@ -309,6 +310,15 @@ class TelegramBot:
         if not webhook_url.startswith("https://"):
             logger.warning("Webhook URL does not start with https.")
 
+        parsed_url = urlparse(webhook_url)
+        url_path = parsed_url.path
+        if not url_path:
+            url_path = "/"  # Expects a path, root path is "/"
+        elif not url_path.startswith("/"):  # E nsure leading slash if path exists
+            url_path = "/" + url_path
+
+        logger.info(f"Derived URL path for internal server: {url_path}")
+
         try:
             # The application's context manager handles initialize() and shutdown()
             async with self.application:
@@ -322,22 +332,20 @@ class TelegramBot:
                     # certificate=open(cert_path, 'rb') if cert_path else None, # Only if using self-signed certs directly with PTB
                     drop_pending_updates=True  # useful when switching to avoid processing old updates.
                 )
-                logger.info(f"Webhook set successfully to {webhook_url}")
+                logger.info(f"Webhook set successfully with Telegram at {webhook_url}")
 
                 # Start the built-in web server.
-                await self.application.start(
-                    webhook_listen=listen_ip,
-                    webhook_port=listen_port,
-                    url_path=webhook_url.split('/')[-1] if '/' in webhook_url.split('://', 1)[-1] else "",
+                await self.application.run_webhook(
+                    listen=listen_ip,
+                    port=listen_port,
                     secret_token=secret_token,
-                    key=key_path, # Path to your SSL private key file
-                    cert=cert_path # Path to your SSL public certificate file
+                    webhook_url=webhook_url,
+                    ssl_certfile=cert_path if cert_path and key_path else None,
+                    ssl_keyfile=key_path if cert_path and key_path else None,
                 )
-                logger.info(f"Bot is listening for webhooks on {listen_ip}:{listen_port}. Press Ctrl+C to stop.")
+                logger.info(f"Bot is listening for webhooks on {listen_ip}:{listen_port} at path {url_path}. Press Ctrl+C to stop.")
 
-                # Keep the application running until it's stopped (e.g., by Ctrl+C or shutdown signal)
-                stop_event = asyncio.Event()
-                await stop_event.wait()
+
 
         except (KeyboardInterrupt, SystemExit):
             logger.info("Shutdown signal received by bot class (Webhook mode).")
@@ -345,14 +353,17 @@ class TelegramBot:
             logger.error(f"Error during bot execution (Webhook mode): {e}", exc_info=True)
         finally:
             logger.info("Bot class's run method (Webhook mode) finally block executing.")
-            # The `async with self.application` block handles application shutdown.
-            # It will also try to delete the webhook if `self.application.stop()` is called.
-            # However, explicitly deleting it can be good practice if not handled by stop().
-            if hasattr(self.application, 'bot') and self.application.bot:
-                try:
-                    logger.info("Attempting to delete webhook...")
-                    await self.application.bot.delete_webhook(drop_pending_updates=True)
-                    logger.info("Webhook deleted successfully.")
-                except Exception as e_del_wh:
-                    logger.error(f"Failed to delete webhook: {e_del_wh}")
+            if hasattr(self.application,
+                       'bot') and self.application.bot and self.application.updater is None:  # Check if in webhook mode
+                current_webhook_info = await self.application.bot.get_webhook_info()
+                if current_webhook_info and current_webhook_info.url:  # Check if webhook is actually set
+                    try:
+                        logger.info(f"Attempting to delete webhook (current URL: {current_webhook_info.url})...")
+                        if await self.application.bot.delete_webhook(drop_pending_updates=True):
+                            logger.info("Webhook deleted successfully by explicit call.")
+                        else:
+                            logger.warning(
+                                "bot.delete_webhook returned False, webhook might not have been deleted or was not set by this bot.")
+                    except Exception as e_del_wh:
+                        logger.error(f"Failed to delete webhook during explicit cleanup: {e_del_wh}")
             logger.info("Bot class run method (Webhook mode) finished.")
