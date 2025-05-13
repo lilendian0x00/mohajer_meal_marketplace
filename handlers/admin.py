@@ -70,6 +70,7 @@ async def bot_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     try:
         async with get_db_session() as db_session:
+            # ... (data fetching code remains the same) ...
             total_users = await crud.get_total_users_count(db_session)
             admin_users = await crud.get_admin_users_count(db_session)
             verified_users = await crud.get_verified_users_count(db_session)
@@ -87,51 +88,52 @@ async def bot_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             cancelled_listings_count = await crud.get_listings_count_by_status(db_session, models.ListingStatus.CANCELLED)
 
             total_meals = await crud.get_total_meals_count(db_session)
-            active_meals = await crud.get_active_meals_count(db_session) # Meals for today/future
+            active_meals = await crud.get_active_meals_count(db_session)
 
-        # Prepare the message using MarkdownV2
-        stats_message_parts = [
-            f"📊 *آمار کلی ربات Mohajer Meal Marketplace*\n",
-            "─" * 20 + "\n", # Separator
+            # Prepare the message using MarkdownV2
+            stats_message_parts = [
+                f"📊 *آمار کلی ربات Mohajer Meal Marketplace*\n",
+                "─" * 20 + "\n",  # Separator
 
-            f"👤 *بخش کاربران:*\n"
-            f"  ▫️ کل کاربران ثبت‌شده: `{total_users}` نفر\n"
-            f"  ▫️ کاربران ادمین: `{admin_users}` نفر\n"
-            f"  ▫️ کاربران تایید شده: `{verified_users}` نفر\n"
-            f"  ▫️ کاربران غیرفعال: `{inactive_users}` نفر\n",
+                f"👤 *بخش کاربران:*\n"
+                f"  ▫️ کل کاربران ثبت‌شده: `{total_users}` نفر\n"
+                f"  ▫️ کاربران ادمین: `{admin_users}` نفر\n"
+                f"  ▫️ کاربران تایید شده: `{verified_users}` نفر\n"
+                f"  ▫️ کاربران غیرفعال: `{inactive_users}` نفر\n",
 
-            f"🏷️ *بخش آگهی‌ها (لیستینگ‌ها):*\n"
-            f"  ✅ فروخته شده:\n"
-            f"    ▫️ تعداد: `{sold_listings_count}` عدد\n"
-            f"    ▫️ ارزش کل: `{sold_listings_value:,.0f}` تومان\n"
-            f"  🛒 موجود برای فروش:\n"
-            f"    ▫️ تعداد: `{available_listings_count}` عدد\n"
-            f"    ▫️ ارزش کل آگهی‌های موجود: `{available_listings_value:,.0f}` تومان\n"
-            f"  ⏳ در انتظار تایید فروشنده:\n"
-            f"    ▫️ تعداد: `{pending_listings_count}` عدد\n"
-            f"    ▫️ ارزش کل آگهی‌های در انتظار: `{pending_listings_value:,.0f}` تومان\n"
-            f"  ❌ لغو شده:\n"
-            f"    ▫️ تعداد: `{cancelled_listings_count}` عدد\n",
+                f"🏷️ *بخش آگهی‌ها \\(لیستینگ‌ها\\):*\n"
+                f"  ✅ فروخته شده:\n"
+                f"    ▫️ تعداد: `{sold_listings_count}` عدد\n"
+                f"    ▫️ ارزش کل: `{sold_listings_value:,.0f}` تومان\n"
+                f"  🛒 موجود برای فروش:\n"
+                f"    ▫️ تعداد: `{available_listings_count}` عدد\n"
+                f"    ▫️ ارزش کل آگهی‌های موجود: `{available_listings_value:,.0f}` تومان\n"
+                f"  ⏳ در انتظار تایید فروشنده:\n"
+                f"    ▫️ تعداد: `{pending_listings_count}` عدد\n"
+                f"    ▫️ ارزش کل آگهی‌های در انتظار: `{pending_listings_value:,.0f}` تومان\n"
+                f"  ❌ لغو شده:\n"
+                f"    ▫️ تعداد: `{cancelled_listings_count}` عدد\n",
 
-            f"🍲 *بخش غذاها (تعریف شده در سیستم):*\n"
-            f"  ▫️ کل غذاهای تعریف شده: `{total_meals}` نوع\n"
-            f"  ▫️ غذاهای فعال (امروز و آینده): `{active_meals}` نوع\n",
+                f"🍲 *بخش غذاها \\(تعریف شده در سیستم\\):*\n"
+                f"  ▫️ کل غذاهای تعریف شده: `{total_meals}` نوع\n"
+                f"  ▫️ غذاهای فعال \\(امروز و آینده\\): `{active_meals}` نوع\n",
 
-            "─" * 20 + "\n",
-            f"⏱️ آمار بروز شده در: `{escape_markdown_v2(datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z'))}`"
-        ]
+                "─" * 20 + "\n",
+                f"⏱️ آمار بروز شده در: `{escape_markdown_v2(datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z'))}`"
+            ]
 
-        full_stats_message = "\n".join(stats_message_parts)
+            full_stats_message = "\n".join(stats_message_parts)
 
-        # Ensure the message is not too long (Telegram limit is 4096 chars)
-        if len(full_stats_message) > 4096:
-            logger.warning("Statistics message is too long, might be truncated by Telegram.")
-            full_stats_message = full_stats_message[:4090] + "\n\n...(پیام خلاصه شد)"
+            # Ensure the message is not too long (Telegram limit is 4096 chars)
+            if len(full_stats_message) > 4096:
+                logger.warning("Statistics message is too long, might be truncated by Telegram.")
+                # Also escape parentheses in the truncation message if they exist and are literal
+                full_stats_message = full_stats_message[:4090] + "\n\n\\.\\.\\.\\(پیام خلاصه شد\\)"
 
-        await message.reply_text(
-            text=full_stats_message,
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
+            await message.reply_text(
+                text=full_stats_message,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
 
     except Exception as e:
         logger.error(f"Error generating bot statistics: {e}", exc_info=True)
