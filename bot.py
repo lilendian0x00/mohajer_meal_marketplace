@@ -262,10 +262,6 @@ class TelegramBot:
                 lambda update, context: update.callback_query.answer(), pattern=r'^history_noop$'
             ), group=1)
 
-            self.application.add_handler(CallbackQueryHandler(
-                handlers.bot_statistics, pattern=f"^{handlers.CALLBACK_ADMIN_REFRESH_STATS}$"
-            ), group=admin_handler_group)
-
             admin_handler_group = 10  # Using a new group for admin commands
             self.application.add_handler(CommandHandler("setadmin", handlers.set_admin_status),
                                          group=admin_handler_group)
@@ -287,6 +283,11 @@ class TelegramBot:
 
             self.application.add_handler(CommandHandler("stats", handlers.bot_statistics),
                                          group=admin_handler_group)
+
+            self.application.add_handler(CallbackQueryHandler(
+                handlers.bot_statistics, pattern=f"^{handlers.CALLBACK_ADMIN_REFRESH_STATS}$"
+            ), group=admin_handler_group)
+
             # Generic Text Handler (Group 2)
             # self.application.add_handler(MessageHandler(
             #     filters.TEXT & ~filters.COMMAND, handlers.echo
