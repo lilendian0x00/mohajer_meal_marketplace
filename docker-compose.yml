@@ -7,8 +7,8 @@ services:
     restart: unless-stopped
     network_mode: "host"
 
-    ports:
-      - "443:80"
+    #ports:
+      #- "443:80"
 
     volumes:
       # Mount a named volume to /data inside the container
