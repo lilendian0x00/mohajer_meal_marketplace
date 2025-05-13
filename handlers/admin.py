@@ -92,7 +92,7 @@ async def bot_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
             # Prepare the message using MarkdownV2
             stats_message_parts = [
-                f"📊 *آمار کلی ربات Mohajer Meal Marketplace*\n",
+                f"📊 *آمار کلی ربات",
                 "─" * 20 + "\n",  # Separator
 
                 f"👤 *بخش کاربران:*\n"
