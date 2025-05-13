@@ -147,7 +147,7 @@ def main_sync(): # Renamed to avoid confusion with async main
     if not config.WEBHOOK_BASE_URL:
         logger.error("FATAL: WEBHOOK_BASE_URL is not set in config. Cannot start in webhook mode.")
         return
-    webhook_url = f"{config.WEBHOOK_BASE_URL.rstrip('/')}/{config.TELEGRAM_BOT_TOKEN}"
+    webhook_url = f"{config.WEBHOOK_BASE_URL.rstrip('/')}/testwebhookpath"
 
     logger.info("Creating TelegramBot instance...")
     # Pass SSL cert/key to __init__ if PTB is to handle SSL.
