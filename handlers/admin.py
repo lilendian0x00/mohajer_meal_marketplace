@@ -14,7 +14,8 @@ from telegram.ext import (
     filters,
 )
 from telegram.constants import ParseMode
-from config import ADMIN_TELEGRAM_IDS, HISTORY_PAGE_SIZE # Using HISTORY_PAGE_SIZE for user list pagination for now
+from config import ADMIN_TELEGRAM_IDS, HISTORY_PAGE_SIZE, \
+    USERS_LIST_PAGE_SIZE  # Using HISTORY_PAGE_SIZE for user list pagination for now
 from self_market.db.session import get_db_session
 from self_market.db import crud
 from self_market import models
@@ -167,7 +168,7 @@ async def _send_list_users_page(update: Update, context: ContextTypes.DEFAULT_TY
     if not message: return
 
     async with get_db_session() as db_session:
-        users, total_count = await crud.admin_get_all_users(db_session, page=page, page_size=HISTORY_PAGE_SIZE)
+        users, total_count = await crud.admin_get_all_users(db_session, page=page, page_size=USERS_LIST_PAGE_SIZE)
 
     if not users and page == 0:
         text = "هیچ کاربری یافت نشد."
