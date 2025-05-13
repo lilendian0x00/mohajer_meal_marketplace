@@ -165,7 +165,6 @@ def main_sync(): # Renamed to avoid confusion with async main
     # It also handles SIGINT/SIGTERM for graceful shutdown.
     # The post_init and post_shutdown tasks will be awaited by PTB.
 
-    webhook_url_for_ptb_server = f"{config.WEBHOOK_BASE_URL.rstrip('/')}/"
     logger.info(f"PTB run_webhook will be called with webhook_url: {webhook_url}")
     bot_instance.application.run_webhook(
         listen=config.WEBHOOK_LISTEN_IP,
@@ -174,7 +173,7 @@ def main_sync(): # Renamed to avoid confusion with async main
         webhook_url=webhook_url,
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
-        url_path=webhook_url_for_ptb_server,
+        url_path=f"/{config.TELEGRAM_BOT_TOKEN}",
     )
     logger.info("PTB Application run_webhook has finished.")
 
