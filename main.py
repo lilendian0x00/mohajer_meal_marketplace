@@ -165,6 +165,7 @@ def main_sync(): # Renamed to avoid confusion with async main
     # It also handles SIGINT/SIGTERM for graceful shutdown.
     # The post_init and post_shutdown tasks will be awaited by PTB.
 
+    logger.info(f"PTB run_webhook will be called with webhook_url: {webhook_url}")
     bot_instance.application.run_webhook(
         listen=config.WEBHOOK_LISTEN_IP,
         port=config.WEBHOOK_LISTEN_PORT,
