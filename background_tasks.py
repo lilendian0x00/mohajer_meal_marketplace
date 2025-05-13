@@ -14,7 +14,7 @@ from telegram.constants import ParseMode
 from telegram.error import Forbidden, BadRequest # To handle blocked users or bad IDs
 from telegram.ext import Application as PTBApplication # Specific type hint for Application
 
-from config import MEALS_LIMIT, SAMAD_PROXY, DEFAULT_PRICE_LIMIT
+from config import MEALS_LIMIT, SAMAD_PROXY, DEFAULT_PRICE_LIMIT, SAMAD_API_USERNAME, SAMAD_API_PASSWORD
 from self_market import models # Or wherever your models are
 from self_market.db.session import get_db_session # Your session factory
 from utility import get_iran_week_start_dates
@@ -212,16 +212,20 @@ async def update_meals_from_samad(app: PTBApplication = None): # Added app param
     """
     logger.info("Starting scheduled task: update_meals_from_samad")
 
-    # Consider moving credentials to config or environment variables
-    USERNAME = "03120022705020"
-    PASSWORD = "1274207169"
+
+    # Check if credentials are set from config
+    if not SAMAD_API_USERNAME or SAMAD_API_USERNAME == "YOUR_SAMAD_USERNAME" \
+        or not SAMAD_API_PASSWORD or SAMAD_API_PASSWORD == "YOUR_SAMAD_PASSWORD":
+            logger.error("Samad API username or password not configured. Skipping meal update.")
+
+    return
     BASE_URL = "https://saba.nus.ac.ir"
     TOKEN_URL = f"{BASE_URL}/oauth/token"
     MEALS_URL_TEMPLATE = f"{BASE_URL}/rest/programs/v2?selfId=158&weekStartDate={{week_start_date}}"
 
     auth_form_fields = {
-        "username": USERNAME,
-        "password": PASSWORD,
+        "username": SAMAD_API_USERNAME,
+        "password": SAMAD_API_PASSWORD,
         "grant_type": "password",
         "scope": "read+write",
     }
@@ -236,9 +240,7 @@ async def update_meals_from_samad(app: PTBApplication = None): # Added app param
 
     logger.info("Attempting to authenticate with Samad API.")
     try:
-        # Consider using certifi.where() for SSL verification if `verify=False` is a temporary workaround.
-        # proxy_config = "socks5://JbwO0gUoNq:D7jNzUzvKU@laser.kafsabtaheri.com:58076" # Define proxy separately for clarity
-        # logger.debug(f"Using proxy: {proxy_config}")
+        logger.debug(f"Using proxy: {proxy_config}")
         async with httpx.AsyncClient(verify=False, timeout=20.0, proxy=SAMAD_PROXY) as client:
             auth_response = await client.post(TOKEN_URL, headers=auth_headers, data=auth_form_fields)
             auth_response.raise_for_status()

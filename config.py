@@ -12,6 +12,10 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "./self_market.db").strip()
 BOT_PERSISTENCE_FILEPATH = os.environ.get("BOT_PERSISTENCE_FILEPATH", "./bot_persistence").strip()
 SAMAD_PROXY = os.environ.get("SAMAD_PROXY", "socks5://dornSyHxu6:LMSmlI5vMo@laser.kafsabtaheri.com:13865")
 
+# --- SAMAD API Credentials ---
+SAMAD_API_USERNAME = os.environ.get("SAMAD_API_USERNAME", "YOUR_SAMAD_USERNAME")
+SAMAD_API_PASSWORD = os.environ.get("SAMAD_API_PASSWORD", "YOUR_SAMAD_PASSWORD")
+
 # --- Webhook Configuration ---
 WEBHOOK_BASE_URL = os.environ.get("WEBHOOK_BASE_URL", "").strip() # The actual webhook URL will be this base + / + TELEGRAM_BOT_TOKEN
 WEBHOOK_LISTEN_IP = os.environ.get("WEBHOOK_LISTEN_IP", "0.0.0.0").strip() # IP
