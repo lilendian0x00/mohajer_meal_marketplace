@@ -14,14 +14,12 @@ from telegram.constants import ParseMode
 from telegram.error import Forbidden, BadRequest # To handle blocked users or bad IDs
 from telegram.ext import Application as PTBApplication # Specific type hint for Application
 
-from config import MEALS_LIMIT, SAMAD_PROXY
+from config import MEALS_LIMIT, SAMAD_PROXY, DEFAULT_PRICE_LIMIT
 from self_market import models # Or wherever your models are
 from self_market.db.session import get_db_session # Your session factory
 from utility import get_iran_week_start_dates
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_PRICE_LIMIT = 30000
 
 async def check_pending_listings_timeout(app: PTBApplication):
     """
@@ -333,7 +331,7 @@ async def update_meals_from_samad(app: PTBApplication = None): # Added app param
                         actual_price_limit = price_limit_config.get("priceLimit")
                         logger.debug(f"Price limit for '{food_name}': {actual_price_limit}")
                     else:
-                        actual_price_limit = 30000
+                        actual_price_limit = DEFAULT_PRICE_LIMIT
                         logger.warning(f"Price limit configuration not found for '{food_name}'. Price limit will be set to {DEFAULT_PRICE_LIMIT}.")
 
                     new_meal_obj = models.Meal(
