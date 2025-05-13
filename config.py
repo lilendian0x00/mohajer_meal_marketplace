@@ -37,7 +37,7 @@ LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 # --- Application Logic Constants ---
 HISTORY_PAGE_SIZE: int = 5  # How many items to show per page in history view
-USERS_LIST_PAGE_SIZE: int = 10  # How many items to show per page in admin users list `/userslist`
+USERS_LIST_PAGE_SIZE: int = 30  # How many items to show per page in admin users list `/userslist`
 PENDING_TIMEOUT_MINUTES: int = int(os.environ.get("PENDING_TIMEOUT_MINUTES", "1440")) # How long (in minutes) a listing can stay in AWAITING_CONFIRMATION before timeout
 # How often (in minutes) the listing timeout is checked
 BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES: int = int(os.environ.get("LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES", "5"))

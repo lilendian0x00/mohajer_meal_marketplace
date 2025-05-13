@@ -14,8 +14,7 @@ from telegram.ext import (
     filters,
 )
 from telegram.constants import ParseMode
-from config import ADMIN_TELEGRAM_IDS, HISTORY_PAGE_SIZE, \
-    USERS_LIST_PAGE_SIZE  # Using HISTORY_PAGE_SIZE for user list pagination for now
+from config import ADMIN_TELEGRAM_IDS, USERS_LIST_PAGE_SIZE
 from self_market.db.session import get_db_session
 from self_market.db import crud
 from self_market import models
@@ -189,7 +188,7 @@ async def _send_list_users_page(update: Update, context: ContextTypes.DEFAULT_TY
             )
         text = "\n".join(text_parts)
 
-        total_pages = (total_count + HISTORY_PAGE_SIZE - 1) // HISTORY_PAGE_SIZE
+        total_pages = (total_count + USERS_LIST_PAGE_SIZE - 1) // USERS_LIST_PAGE_SIZE
         keyboard_buttons = []
         row = []
         if page > 0:
