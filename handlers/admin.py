@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 from telegram.constants import ParseMode
-from config import ADMIN_TELEGRAM_IDS, USERS_LIST_PAGE_SIZE
+from config import ADMIN_TELEGRAM_IDS, USERS_LIST_PAGE_SIZE, HISTORY_PAGE_SIZE
 from handlers import CALLBACK_ADMIN_REFRESH_STATS
 from self_market.db.session import get_db_session
 from self_market.db import crud
@@ -58,6 +58,282 @@ CALLBACK_ADMIN_MEAL_CONFIRM_NO = "admin_meal_conf_no"
 CALLBACK_ADDMEAL_TYPE_PREFIX = "addmeal_type_"
 CALLBACK_ADDMEAL_TYPE_NAHAR = f"{CALLBACK_ADDMEAL_TYPE_PREFIX}ناهار" # Lunch
 CALLBACK_ADDMEAL_TYPE_SHAM = f"{CALLBACK_ADDMEAL_TYPE_PREFIX}شام"   # Dinner
+CALLBACK_ADMIN_ALL_SOLD_PAGE = "admin_allsold_page_"
+CALLBACK_ADMIN_USER_SOLD_PAGE_PREFIX = "admin_usersold_"
+CALLBACK_ADMIN_SOLD_NOOP = "admin_sold_noop" # For page number button
+
+
+@admin_required
+async def help_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays a list of available admin commands."""
+    message = update.message
+    if not message:
+        return
+
+    logger.info(f"Admin {update.effective_user.id} requested admin help.")
+
+    admin_help_text_parts = [
+        "⚙️ *راهنمای دستورات ادمین*\n",
+        "دستورات زیر فقط برای ادمین‌ها قابل استفاده هستند:\n",
+        "─" * 20 + "\n",
+
+        "👤 *مدیریت کاربران:*\n",
+        f"`/setadmin <user_id> <true|false>` {escape_markdown_v2('- تنظیم/لغو دسترسی ادمین برای کاربر')}\n",
+        f"`/setactive <user_id> <true|false>` {escape_markdown_v2('- فعال/غیرفعال کردن کاربر')}\n",
+        f"`/getuser <user_id>` {escape_markdown_v2('- نمایش اطلاعات کامل کاربر')}\n",
+        f"`/listusers [page]` {escape_markdown_v2('- نمایش لیست کاربران (صفحه‌بندی شده)')}\n",
+        "\n",
+
+        "🍲 *مدیریت غذاها:*\n",
+        f"`/addmeal` {escape_markdown_v2('- شروع فرآیند افزودن غذای جدید به سیستم')}\n",
+        f"`/delmeal <meal_id>` {escape_markdown_v2('- حذف یک نوع غذا از سیستم (اگر توسط آگهی استفاده نشده باشد)')}\n",
+        "\n",
+
+        "🏷️ *مدیریت آگهی‌ها:*\n",
+        f"`/dellisting <listing_id>` {escape_markdown_v2('- حذف یک آگهی خاص از سیستم')}\n",
+        f"`/allsold [page]` {escape_markdown_v2('- نمایش تمام آگهی‌های فروخته شده (صفحه‌بندی شده)')}\n",
+        f"`/usersold <user_id> [page]` {escape_markdown_v2('- نمایش آگهی‌های فروخته شده توسط یک کاربر خاص (صفحه‌بندی شده)')}\n",
+        "\n",
+
+        "📊 *آمار و راهنما:*\n",
+        f"`/stats` {escape_markdown_v2('- نمایش آمار کلی ربات (با دکمه بروزرسانی)')}\n",
+        f"`/help_admin` {escape_markdown_v2('- نمایش همین پیام راهنما')}\n",
+        "\n",
+        escape_markdown_v2("نکته: پارامترهای داخل [] اختیاری هستند.")
+    ]
+
+    full_help_message = "".join(admin_help_text_parts)
+
+    await message.reply_text(
+        text=full_help_message,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+
+
+# --- Helper function to format and send sold listings ---
+async def _send_sold_listings_page(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    page: int,
+    listings: list[models.Listing],
+    total_count: int,
+    page_size: int,
+    title_prefix: str,
+    callback_data_prefix: str
+):
+    """
+    Helper function to format and send a paginated list of sold listings.
+    """
+    query = update.callback_query
+    message_to_edit_or_reply = update.message or (query.message if query else None)
+    if not message_to_edit_or_reply: return
+
+    user_id = update.effective_user.id
+
+    if not listings and page == 0:
+        text = f"{title_prefix}\n\n{escape_markdown_v2('هیچ آیتم فروخته شده‌ای یافت نشد.')}"
+        reply_markup = None # No pagination if no items
+    else:
+        text_parts = [f"{title_prefix} \\(صفحه {page + 1}\\)\n"]
+        for l in listings:
+            meal_desc = escape_markdown_v2(l.meal.description if l.meal else "غذای نامشخص")
+            meal_date_shamsi = format_gregorian_date_to_shamsi(l.meal.date if l.meal else None)
+            sold_at_shamsi_time = "تاریخ نامشخص"
+            if l.sold_at:
+                sold_at_shamsi_time = format_gregorian_date_to_shamsi(l.sold_at) + " " + l.sold_at.strftime('%H:%M')
+
+            seller_info_parts = []
+            if l.seller:
+                seller_info_parts.append(f"🧑‍🍳 فروشنده: ")
+                if l.seller.username:
+                    seller_info_parts.append(f"@{escape_markdown_v2(l.seller.username)}")
+                else:
+                    seller_info_parts.append(escape_markdown_v2(l.seller.first_name or "ناشناس"))
+                seller_info_parts.append(f" \\(ID: `{l.seller.telegram_id}`\\)")
+            seller_info = "".join(seller_info_parts)
+
+
+            buyer_info_parts = []
+            if l.buyer:
+                buyer_info_parts.append(f"🛍️ خریدار: ")
+                if l.buyer.username:
+                    buyer_info_parts.append(f"@{escape_markdown_v2(l.buyer.username)}")
+                else:
+                    buyer_info_parts.append(escape_markdown_v2(l.buyer.first_name or "ناشناس"))
+                buyer_info_parts.append(f" \\(ID: `{l.buyer.telegram_id}`\\)")
+            buyer_info = "".join(buyer_info_parts)
+
+            price_formatted = f"{l.price:,.0f}" if l.price is not None else "نامشخص"
+
+            text_parts.append(
+                f"🆔 آگهی: `{l.id}`\n"
+                f"🍲 غذا: *{meal_desc}* \\(تاریخ غذا: {meal_date_shamsi}\\)\n"
+                f"{seller_info}\n"
+                f"{buyer_info}\n"
+                f"💰 قیمت: {escape_markdown_v2(price_formatted)} تومان\n"
+                f"📅 تاریخ فروش: {escape_markdown_v2(sold_at_shamsi_time)}\n"
+                f"─" * 15 # Short separator
+            )
+        text = "\n".join(text_parts)
+
+        total_pages = (total_count + page_size - 1) // page_size
+        keyboard_buttons_row = []
+        if page > 0:
+            keyboard_buttons_row.append(InlineKeyboardButton("« قبلی", callback_data=f"{callback_data_prefix}{page - 1}"))
+        if total_pages > 1:
+            keyboard_buttons_row.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data=CALLBACK_ADMIN_SOLD_NOOP))
+        if page < total_pages - 1:
+            keyboard_buttons_row.append(InlineKeyboardButton("بعدی »", callback_data=f"{callback_data_prefix}{page + 1}"))
+
+        reply_markup = InlineKeyboardMarkup([keyboard_buttons_row]) if keyboard_buttons_row else None
+
+    if query:
+        try:
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.info(f"Sold listings page for admin {user_id} not modified.")
+                await query.answer("صفحه تغییری نکرده است.")
+            else:
+                logger.error(f"Error editing sold listings message for admin {user_id}: {e}", exc_info=True)
+                await query.answer("خطا در بروزرسانی لیست.")
+        except Exception as e_edit:
+            logger.error(f"Unexpected error editing sold listings for admin {user_id}: {e_edit}", exc_info=True)
+            await query.answer("خطای ناشناخته در بروزرسانی.")
+    else:
+        await message_to_edit_or_reply.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+
+
+# 1. Handler for showing ALL sold meals
+@admin_required
+async def show_all_sold_meals_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command handler to show all sold meals, paginated."""
+    page = 0
+    if context.args and context.args[0].isdigit():
+        page = int(context.args[0]) - 1  # User inputs 1-based page
+        if page < 0: page = 0
+
+    await update.message.reply_text("در حال دریافت لیست تمام غذاهای فروخته شده...")
+    async with get_db_session() as db_session:
+        listings, total_count = await crud.get_all_sold_listings(db_session, page=page, page_size=HISTORY_PAGE_SIZE)
+
+    await _send_sold_listings_page(
+        update, context, page, listings, total_count, HISTORY_PAGE_SIZE,
+        title_prefix="📦 *لیست تمام غذاهای فروخته شده*",
+        callback_data_prefix=CALLBACK_ADMIN_ALL_SOLD_PAGE
+    )
+
+@admin_required
+async def show_all_sold_meals_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback handler for paginating all sold meals."""
+    query = update.callback_query
+    await query.answer()
+    try:
+        page = int(query.data.split(CALLBACK_ADMIN_ALL_SOLD_PAGE)[1])
+    except (IndexError, ValueError):
+        logger.error(f"Invalid callback data for all_sold_meals pagination: {query.data}")
+        await query.edit_message_text("خطای دکمه.")
+        return
+
+    async with get_db_session() as db_session:
+        listings, total_count = await crud.get_all_sold_listings(db_session, page=page, page_size=HISTORY_PAGE_SIZE)
+
+    await _send_sold_listings_page(
+        update, context, page, listings, total_count, HISTORY_PAGE_SIZE,
+        title_prefix="📦 *لیست تمام غذاهای فروخته شده*",
+        callback_data_prefix=CALLBACK_ADMIN_ALL_SOLD_PAGE
+    )
+
+
+# 2. Handler for showing sold meals of a SPECIFIC person
+@admin_required
+async def show_user_sold_meals_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command handler to show sold meals for a specific user, paginated."""
+    message = update.message
+    if not context.args or len(context.args) == 0:
+        await message.reply_text(f"استفاده: `{escape_markdown_v2('/usersold <user_telegram_id> [page_number]')}`", parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    try:
+        target_seller_tg_id = int(context.args[0])
+    except ValueError:
+        await message.reply_text(f"{escape_markdown_v2('آیدی تلگرام کاربر باید عدد باشد.')}", parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    page = 0
+    if len(context.args) > 1 and context.args[1].isdigit():
+        page = int(context.args[1]) - 1 # User inputs 1-based page
+        if page < 0: page = 0
+
+    await message.reply_text(f"در حال دریافت لیست غذاهای فروخته شده توسط کاربر `{target_seller_tg_id}`...")
+
+    async with get_db_session() as db_session:
+        listings, total_count, seller_user = await crud.get_sold_listings_by_seller(
+            db_session, seller_telegram_id=target_seller_tg_id, page=page, page_size=HISTORY_PAGE_SIZE
+        )
+
+    if not seller_user:
+        await message.reply_text(f"کاربر با آیدی تلگرام `{target_seller_tg_id}` یافت نشد.", parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    seller_display = f"@{escape_markdown_v2(seller_user.username)}" if seller_user.username else escape_markdown_v2(seller_user.first_name or f"ID: {seller_user.telegram_id}")
+    title = f"📦 *لیست فروش‌های کاربر {seller_display}*"
+    # Append seller_tg_id to the callback prefix for user-specific pagination
+    callback_prefix_with_user = f"{CALLBACK_ADMIN_USER_SOLD_PAGE_PREFIX}{target_seller_tg_id}_"
+
+    await _send_sold_listings_page(
+        update, context, page, listings, total_count, HISTORY_PAGE_SIZE,
+        title_prefix=title,
+        callback_data_prefix=callback_prefix_with_user
+    )
+
+
+@admin_required
+async def show_user_sold_meals_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback handler for paginating a specific user's sold meals."""
+    query = update.callback_query
+    await query.answer()
+
+    # Callback data format: CALLBACK_ADMIN_USER_SOLD_PAGE_PREFIX<seller_tg_id>_<page>
+    # Example: "admin_usersold_1234567_1"
+    try:
+        # Remove the base prefix
+        data_part = query.data.replace(CALLBACK_ADMIN_USER_SOLD_PAGE_PREFIX, "", 1)
+        # Split the remaining <seller_tg_id>_<page>
+        seller_tg_id_str, page_str = data_part.rsplit('_', 1)
+        target_seller_tg_id = int(seller_tg_id_str)
+        page = int(page_str)
+    except (ValueError, IndexError) as e:
+        logger.error(f"Invalid callback data for user_sold_meals pagination: {query.data}, Error: {e}")
+        await query.edit_message_text("خطای دکمه.")
+        return
+
+    async with get_db_session() as db_session:
+        listings, total_count, seller_user = await crud.get_sold_listings_by_seller(
+            db_session, seller_telegram_id=target_seller_tg_id, page=page, page_size=HISTORY_PAGE_SIZE
+        )
+
+    if not seller_user: # Should ideally not happen if command initiated correctly
+        await query.edit_message_text(f"کاربر فروشنده با آیدی `{target_seller_tg_id}` یافت نشد.", parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    seller_display = f"@{escape_markdown_v2(seller_user.username)}" if seller_user.username else escape_markdown_v2(seller_user.first_name or f"ID: {seller_user.telegram_id}")
+    title = f"📦 *لیست فروش‌های کاربر {seller_display}*"
+    callback_prefix_with_user = f"{CALLBACK_ADMIN_USER_SOLD_PAGE_PREFIX}{target_seller_tg_id}_"
+
+    await _send_sold_listings_page(
+        update, context, page, listings, total_count, HISTORY_PAGE_SIZE,
+        title_prefix=title,
+        callback_data_prefix=callback_prefix_with_user
+    )
+
+@admin_required
+async def admin_sold_noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles no-operation callbacks for sold listings pagination page numbers."""
+    query = update.callback_query
+    if query:
+        await query.answer()
+
 
 
 @admin_required

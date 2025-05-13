@@ -63,12 +63,16 @@ __all__ = [
     'list_users_command', 'list_users_callback', 'admin_noop_callback', # Added admin_noop_callback
     'add_meal_conv_handler', # Add the conversation handler itself
     'delete_meal_command', 'delete_listing_command',
-    'bot_statistics',
-    # Add conversation states for admin if they need to be globally accessible for some reason, usually not.
-    # 'ADDMEAL_ASK_DESCRIPTION', 'ADDMEAL_ASK_TYPE', etc.
-    # Add callback data constants for admin if needed globally
+    'bot_statistics', 'show_all_sold_meals_command', 'show_all_sold_meals_callback',
+    'show_user_sold_meals_command', 'show_user_sold_meals_callback',
+    'admin_sold_noop_callback',
+    'help_admin_command',
+
     'CALLBACK_ADMIN_LIST_USERS_PAGE',
-    # 'CALLBACK_ADMIN_MEAL_CONFIRM_YES', 'CALLBACK_ADMIN_MEAL_CONFIRM_NO', # These are used within admin.py
+    'CALLBACK_ADMIN_REFRESH_STATS',
+    'CALLBACK_ADMIN_ALL_SOLD_PAGE',
+    'CALLBACK_ADMIN_USER_SOLD_PAGE_PREFIX',
+    'CALLBACK_ADMIN_SOLD_NOOP',
 
 
     # Optional Fallback Handlers

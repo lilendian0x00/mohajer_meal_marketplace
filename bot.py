@@ -288,6 +288,30 @@ class TelegramBot:
                 handlers.bot_statistics, pattern=f"^{handlers.CALLBACK_ADMIN_REFRESH_STATS}$"
             ), group=admin_handler_group)
 
+            # Sold meals handlers
+            self.application.add_handler(CommandHandler("allsold", handlers.show_all_sold_meals_command),
+                                         group=admin_handler_group)
+            self.application.add_handler(CallbackQueryHandler(
+                handlers.show_all_sold_meals_callback, pattern=f"^{handlers.CALLBACK_ADMIN_ALL_SOLD_PAGE}\\d+$"
+            ), group=admin_handler_group)
+
+            self.application.add_handler(CommandHandler("usersold", handlers.show_user_sold_meals_command),
+                                         group=admin_handler_group)
+            # Regex pattern for user-specific sold meals pagination:
+            # Needs to match "admin_usersold_" followed by digits (seller_id), then "_", then digits (page)
+            self.application.add_handler(CallbackQueryHandler(
+                handlers.show_user_sold_meals_callback,
+                pattern=fr"^{handlers.CALLBACK_ADMIN_USER_SOLD_PAGE_PREFIX}\d+_\d+$"
+            ), group=admin_handler_group)
+
+            self.application.add_handler(CallbackQueryHandler(
+                handlers.admin_sold_noop_callback, pattern=f"^{handlers.CALLBACK_ADMIN_SOLD_NOOP}$"
+            ), group=admin_handler_group)
+
+            # /help_admin command handler
+            self.application.add_handler(CommandHandler("help_admin", handlers.help_admin_command),
+                                         group=admin_handler_group)
+
             # Generic Text Handler (Group 2)
             # self.application.add_handler(MessageHandler(
             #     filters.TEXT & ~filters.COMMAND, handlers.echo

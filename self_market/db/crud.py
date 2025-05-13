@@ -15,6 +15,86 @@ from .. import models # Import the models.py file from the parent directory (sel
 logger = logging.getLogger(__name__)
 
 
+async def get_all_sold_listings(db: AsyncSession, page: int = 0, page_size: int = 5) -> tuple[list[models.Listing], int]:
+    """
+    Fetches all SOLD listings, paginated. Includes seller and buyer info.
+    For admin use.
+    Returns a list of Listing objects and the total count of sold listings.
+    """
+    logger.debug(f"Admin fetching all sold listings, page {page}, page_size {page_size}")
+    offset = page * page_size
+
+    # Query for total count of SOLD listings
+    count_stmt = select(func.count(models.Listing.id)).where(
+        models.Listing.status == models.ListingStatus.SOLD
+    ).select_from(models.Listing)
+    count_result = await db.execute(count_stmt)
+    total_count = count_result.scalar_one_or_none() or 0
+
+    if total_count == 0:
+        return [], 0
+
+    # Query for the page data
+    stmt = select(models.Listing).where(
+        models.Listing.status == models.ListingStatus.SOLD
+    ).options(
+        # Eager load related data needed for display
+        joinedload(models.Listing.meal),
+        joinedload(models.Listing.seller).load_only(models.User.telegram_id, models.User.username, models.User.first_name),
+        joinedload(models.Listing.buyer).load_only(models.User.telegram_id, models.User.username, models.User.first_name)
+    ).order_by(
+        models.Listing.sold_at.desc() # Newest sales first
+    ).offset(offset).limit(page_size)
+
+    result = await db.execute(stmt)
+    listings = result.scalars().all()
+    logger.info(f"Admin fetched {len(listings)} sold listings for page {page}. Total sold: {total_count}")
+    return listings, total_count
+
+async def get_sold_listings_by_seller(db: AsyncSession, seller_telegram_id: int, page: int = 0, page_size: int = 5) -> tuple[list[models.Listing], int, models.User | None]:
+    """
+    Fetches SOLD listings for a specific seller, paginated. Includes buyer info.
+    For admin use.
+    Returns a list of Listing objects, the total count of their sold listings, and the seller User object.
+    """
+    logger.debug(f"Admin fetching sold listings for seller {seller_telegram_id}, page {page}, page_size {page_size}")
+
+    # First, get the seller's DB User object
+    seller_user = await get_user_by_telegram_id(db, seller_telegram_id)
+    if not seller_user:
+        logger.warning(f"Seller with Telegram ID {seller_telegram_id} not found.")
+        return [], 0, None
+
+    offset = page * page_size
+
+    # Query for total count of SOLD listings for this seller
+    count_stmt = select(func.count(models.Listing.id)).where(
+        models.Listing.seller_id == seller_user.id,
+        models.Listing.status == models.ListingStatus.SOLD
+    ).select_from(models.Listing)
+    count_result = await db.execute(count_stmt)
+    total_count = count_result.scalar_one_or_none() or 0
+
+    if total_count == 0:
+        return [], 0, seller_user # Return seller user even if no sales
+
+    # Query for the page data
+    stmt = select(models.Listing).where(
+        models.Listing.seller_id == seller_user.id,
+        models.Listing.status == models.ListingStatus.SOLD
+    ).options(
+        joinedload(models.Listing.meal),
+        joinedload(models.Listing.buyer).load_only(models.User.telegram_id, models.User.username, models.User.first_name)
+        # Seller is already known
+    ).order_by(
+        models.Listing.sold_at.desc() # Newest sales first
+    ).offset(offset).limit(page_size)
+
+    result = await db.execute(stmt)
+    listings = result.scalars().all()
+    logger.info(f"Admin fetched {len(listings)} sold listings for seller {seller_telegram_id} on page {page}. Total for seller: {total_count}")
+    return listings, total_count, seller_user
+
 async def get_user_by_telegram_id(db: AsyncSession, telegram_id: int, load_listings: bool = False) -> models.User | None:
     """Fetches a user by their Telegram ID."""
     # Access models like models.User, models.Listing, etc.
