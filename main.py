@@ -151,8 +151,6 @@ async def main() -> None:
             secret_token=config.WEBHOOK_SECRET_TOKEN or None
         )
 
-
-
     except (ValueError, RuntimeError, TypeError) as e:  # Catch TypeError too
         logger.error(f"Failed to create/run bot instance or critical setup error: {e}", exc_info=True)
     except Exception as e:
@@ -161,13 +159,8 @@ async def main() -> None:
         logger.info("Main function's finally block executing.")
         if scheduler and scheduler.running:
             logger.info("Shutting down APScheduler from main finally block...")
-            try:
-                # Wait for running jobs with a timeout if possible, though this is hard with asyncio
-                # For simplicity, just shut down.
-                scheduler.shutdown(wait=False)  # wait=False is usually better for async
-                logger.info("APScheduler shutdown call initiated from main finally block.")
-            except Exception as e_sched_shutdown:
-                logger.error(f"Error during scheduler shutdown in main finally: {e_sched_shutdown}")
+            scheduler.shutdown(wait=False)
+            logger.info("APScheduler shutdown call initiated from main finally block.")
 
 
 def proper_atexit_shutdown():
@@ -190,17 +183,15 @@ def proper_atexit_shutdown():
 
 # Entry Point
 if __name__ == "__main__":
-    # Register the atexit hook before starting the event loop
-    atexit.register(proper_atexit_shutdown)
     logger.info("Starting application...")
     try:
         asyncio.run(main())
     except RuntimeError as e:
-        if "Event loop is closed" in str(e) and "Win" in asyncio.ProactorEventLoop.__module__:
-             logger.warning("Suppressed 'Event loop is closed' error during final Windows cleanup.")
+        if "Event loop is closed" in str(e): # Can happen on final exit
+            logger.warning(f"Asyncio RuntimeError (often on exit): {e}")
         else:
              logger.exception("Application level RuntimeError:", exc_info=e)
     except KeyboardInterrupt:
-        logger.info("Application level KeyboardInterrupt caught. Shutting down...")
+        logger.info("Application received KeyboardInterrupt. Exiting.")
     finally:
         logger.info("Application finished.")

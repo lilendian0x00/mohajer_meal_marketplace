@@ -322,28 +322,25 @@ class TelegramBot:
         try:
             # The application's context manager handles initialize() and shutdown()
             async with self.application:
-                await self.application.initialize() # Initialize handlers, persistence etc.
-
                 # Set the webhook.
                 await self.application.bot.set_webhook(
                     url=webhook_url,
                     allowed_updates=Update.ALL_TYPES,
                     secret_token=secret_token,
-                    # certificate=open(cert_path, 'rb') if cert_path else None, # Only if using self-signed certs directly with PTB
-                    drop_pending_updates=True  # useful when switching to avoid processing old updates.
+                    drop_pending_updates=True
                 )
                 logger.info(f"Webhook set successfully with Telegram at {webhook_url}")
 
-                # Start the built-in web server.
+                logger.info(f"Bot is listening for webhooks on {listen_ip}:{listen_port} at path {url_path}. Press Ctrl+C to stop.")
+
+                # `run_webhook` is the correct method here.
+                # It configures uvicorn and runs it.
                 await self.application.run_webhook(
                     listen=listen_ip,
                     port=listen_port,
                     secret_token=secret_token,
-                    webhook_url=webhook_url  # This helps PTB determine the path for its internal router
+                    webhook_url=webhook_url
                 )
-                logger.info(f"Bot is listening for webhooks on {listen_ip}:{listen_port} at path {url_path}. Press Ctrl+C to stop.")
-
-
 
         except (KeyboardInterrupt, SystemExit):
             logger.info("Shutdown signal received by bot class (Webhook mode).")
