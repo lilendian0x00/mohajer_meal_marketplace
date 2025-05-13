@@ -107,9 +107,9 @@ async def perform_startup_tasks(ptb_app: Application):
     logger.info("Startup tasks complete.")
 
 
-async def post_shutdown_tasks():
+async def post_shutdown_tasks(app: Application | None = None): # Add the app argument
     """Tasks to run after PTB application has shut down."""
-    global scheduler_ref
+    global scheduler_ref # Use the global reference
     logger.info("Performing post-shutdown tasks...")
     if scheduler_ref and scheduler_ref.running:
         logger.info("Shutting down APScheduler in post_shutdown_tasks...")
@@ -140,8 +140,8 @@ def main_sync(): # Renamed to avoid confusion with async main
 
     # --- Configure PTB Application with startup/shutdown tasks ---
     # These run within the Application's own lifecycle management
-    ptb_app.post_init = lambda app_param=ptb_app: perform_startup_tasks(app_param) # Pass app to startup tasks
-    ptb_app.post_shutdown = post_shutdown_tasks
+    ptb_app.post_init = perform_startup_tasks  # PTB passes the application instance here automatically
+    ptb_app.post_shutdown = post_shutdown_tasks  # PTB passes the application instance here automatically
 
     logger.info("Starting PTB Application with webhook server...")
     # `run_webhook` will block and manage its own loop interaction.
