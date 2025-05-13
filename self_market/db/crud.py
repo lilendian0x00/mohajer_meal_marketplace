@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone, date, timedelta
 from decimal import Decimal
 from typing import Any, Coroutine
-
+from sqlalchemy import func, sum as sql_sum
 from sqlalchemy import or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -23,6 +23,57 @@ async def get_user_by_telegram_id(db: AsyncSession, telegram_id: int, load_listi
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
+
+async def get_total_users_count(db: AsyncSession) -> int:
+    """Returns the total number of users in the system."""
+    stmt = select(func.count(models.User.id))
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() or 0
+
+async def get_admin_users_count(db: AsyncSession) -> int:
+    """Returns the total number of admin users."""
+    stmt = select(func.count(models.User.id)).where(models.User.is_admin == True)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() or 0
+
+async def get_verified_users_count(db: AsyncSession) -> int:
+    """Returns the total number of verified users."""
+    stmt = select(func.count(models.User.id)).where(models.User.is_verified == True)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() or 0
+
+async def get_inactive_users_count(db: AsyncSession) -> int:
+    """Returns the total number of inactive (disabled) users."""
+    stmt = select(func.count(models.User.id)).where(models.User.is_active == False)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() or 0
+
+async def get_listings_count_by_status(db: AsyncSession, status: models.ListingStatus) -> int:
+    """Returns the count of listings for a given status."""
+    stmt = select(func.count(models.Listing.id)).where(models.Listing.status == status)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() or 0
+
+async def get_total_value_of_listings_by_status(db: AsyncSession, status: models.ListingStatus) -> Decimal:
+    """Returns the total sum of prices for listings of a given status."""
+    stmt = select(sql_sum(models.Listing.price)).where(models.Listing.status == status)
+    result = await db.execute(stmt)
+    total_value = result.scalar_one_or_none()
+    return total_value if total_value is not None else Decimal('0.00')
+
+
+async def get_active_meals_count(db: AsyncSession) -> int:
+    """Returns the count of meals that are for today or in the future."""
+    today = datetime.now(timezone.utc).date()
+    stmt = select(func.count(models.Meal.id)).where(models.Meal.date >= today)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() or 0
+
+async def get_total_meals_count(db: AsyncSession) -> int:
+    """Returns the total number of meals in the system (including past)."""
+    stmt = select(func.count(models.Meal.id))
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() or 0
 
 async def get_all_db_admin_users(db: AsyncSession) -> list[models.User]:
     """Fetches all users currently marked as admin in the database."""

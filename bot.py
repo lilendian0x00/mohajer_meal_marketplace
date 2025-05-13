@@ -281,6 +281,8 @@ class TelegramBot:
             self.application.add_handler(CommandHandler("dellisting", handlers.delete_listing_command),
                                          group=admin_handler_group)
 
+            self.application.add_handler(CommandHandler("stats", handlers.bot_statistics),
+                                         group=admin_handler_group)
             # Generic Text Handler (Group 2)
             # self.application.add_handler(MessageHandler(
             #     filters.TEXT & ~filters.COMMAND, handlers.echo

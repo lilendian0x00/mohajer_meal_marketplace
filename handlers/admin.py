@@ -1,7 +1,7 @@
 import logging
 from functools import wraps
 from decimal import Decimal, InvalidOperation
-from datetime import date as GregorianDate # Alias to avoid conflict with datetime.date
+from datetime import date as GregorianDate, timezone  # Alias to avoid conflict with datetime.date
 from datetime import datetime
 import jdatetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -56,6 +56,86 @@ CALLBACK_ADMIN_MEAL_CONFIRM_NO = "admin_meal_conf_no"
 CALLBACK_ADDMEAL_TYPE_PREFIX = "addmeal_type_"
 CALLBACK_ADDMEAL_TYPE_NAHAR = f"{CALLBACK_ADDMEAL_TYPE_PREFIX}ناهار" # Lunch
 CALLBACK_ADDMEAL_TYPE_SHAM = f"{CALLBACK_ADDMEAL_TYPE_PREFIX}شام"   # Dinner
+
+
+@admin_required
+async def bot_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays comprehensive bot statistics for admins."""
+    message = update.message
+    if not message:
+        return
+
+    logger.info(f"Admin {update.effective_user.id} requested bot statistics.")
+    await message.reply_text("در حال جمع‌آوری آمار ربات...") # "Gathering bot statistics..."
+
+    try:
+        async with get_db_session() as db_session:
+            total_users = await crud.get_total_users_count(db_session)
+            admin_users = await crud.get_admin_users_count(db_session)
+            verified_users = await crud.get_verified_users_count(db_session)
+            inactive_users = await crud.get_inactive_users_count(db_session)
+
+            sold_listings_count = await crud.get_listings_count_by_status(db_session, models.ListingStatus.SOLD)
+            sold_listings_value = await crud.get_total_value_of_listings_by_status(db_session, models.ListingStatus.SOLD)
+
+            available_listings_count = await crud.get_listings_count_by_status(db_session, models.ListingStatus.AVAILABLE)
+            available_listings_value = await crud.get_total_value_of_listings_by_status(db_session, models.ListingStatus.AVAILABLE)
+
+            pending_listings_count = await crud.get_listings_count_by_status(db_session, models.ListingStatus.AWAITING_CONFIRMATION)
+            pending_listings_value = await crud.get_total_value_of_listings_by_status(db_session, models.ListingStatus.AWAITING_CONFIRMATION)
+
+            cancelled_listings_count = await crud.get_listings_count_by_status(db_session, models.ListingStatus.CANCELLED)
+
+            total_meals = await crud.get_total_meals_count(db_session)
+            active_meals = await crud.get_active_meals_count(db_session) # Meals for today/future
+
+        # Prepare the message using MarkdownV2
+        stats_message_parts = [
+            f"📊 *آمار کلی ربات Mohajer Meal Marketplace*\n",
+            "─" * 20 + "\n", # Separator
+
+            f"👤 *بخش کاربران:*\n"
+            f"  ▫️ کل کاربران ثبت‌شده: `{total_users}` نفر\n"
+            f"  ▫️ کاربران ادمین: `{admin_users}` نفر\n"
+            f"  ▫️ کاربران تایید شده: `{verified_users}` نفر\n"
+            f"  ▫️ کاربران غیرفعال: `{inactive_users}` نفر\n",
+
+            f"🏷️ *بخش آگهی‌ها (لیستینگ‌ها):*\n"
+            f"  ✅ فروخته شده:\n"
+            f"    ▫️ تعداد: `{sold_listings_count}` عدد\n"
+            f"    ▫️ ارزش کل: `{sold_listings_value:,.0f}` تومان\n"
+            f"  🛒 موجود برای فروش:\n"
+            f"    ▫️ تعداد: `{available_listings_count}` عدد\n"
+            f"    ▫️ ارزش کل آگهی‌های موجود: `{available_listings_value:,.0f}` تومان\n"
+            f"  ⏳ در انتظار تایید فروشنده:\n"
+            f"    ▫️ تعداد: `{pending_listings_count}` عدد\n"
+            f"    ▫️ ارزش کل آگهی‌های در انتظار: `{pending_listings_value:,.0f}` تومان\n"
+            f"  ❌ لغو شده:\n"
+            f"    ▫️ تعداد: `{cancelled_listings_count}` عدد\n",
+
+            f"🍲 *بخش غذاها (تعریف شده در سیستم):*\n"
+            f"  ▫️ کل غذاهای تعریف شده: `{total_meals}` نوع\n"
+            f"  ▫️ غذاهای فعال (امروز و آینده): `{active_meals}` نوع\n",
+
+            "─" * 20 + "\n",
+            f"⏱️ آمار بروز شده در: `{escape_markdown_v2(datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z'))}`"
+        ]
+
+        full_stats_message = "\n".join(stats_message_parts)
+
+        # Ensure the message is not too long (Telegram limit is 4096 chars)
+        if len(full_stats_message) > 4096:
+            logger.warning("Statistics message is too long, might be truncated by Telegram.")
+            full_stats_message = full_stats_message[:4090] + "\n\n...(پیام خلاصه شد)"
+
+        await message.reply_text(
+            text=full_stats_message,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating bot statistics: {e}", exc_info=True)
+        await message.reply_text("متاسفانه در دریافت آمار خطایی رخ داد. لطفا دوباره تلاش کنید.")
 
 # User Management Handlers
 @admin_required
