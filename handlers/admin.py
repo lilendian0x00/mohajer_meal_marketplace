@@ -189,7 +189,7 @@ async def _send_list_users_page(update: Update, context: ContextTypes.DEFAULT_TY
             )
         text = "\n".join(text_parts)
 
-        total_pages = (total_count + HISTORY_PAGE_SIZE - 1) // HISTORY_PAGE_SIZE
+        total_pages = (total_count + USERS_LIST_PAGE_SIZE - 1) // USERS_LIST_PAGE_SIZE
         keyboard_buttons = []
         row = []
         if page > 0:
