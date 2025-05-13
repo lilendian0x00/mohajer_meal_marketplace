@@ -292,3 +292,31 @@ class TelegramBot:
             logger.error(f"Handler registration failed: {e}", exc_info=True)
             # Depending on severity, you might want to raise this
             raise RuntimeError(f"Failed to register handlers: {e}")
+
+    async def set_bot_webhook(self, webhook_url: str, secret_token: str | None = None):
+        """Sets the webhook with Telegram. Called after app initialization."""
+        logger.info(f"Attempting to set webhook with Telegram: {webhook_url}")
+        await self.application.bot.set_webhook(
+            url=webhook_url,
+            allowed_updates=Update.ALL_TYPES,
+            secret_token=secret_token,
+            drop_pending_updates=True
+        )
+        logger.info(f"Webhook set successfully with Telegram at {webhook_url}")
+
+    async def run_ptb_webhook_server(
+            self,
+            listen_ip: str = "0.0.0.0",
+            listen_port: int = 8000,
+            secret_token: str | None = None,
+            webhook_url_for_ptb: str | None = None  # The full URL PTB needs to match path
+    ):
+        """Runs the PTB webhook server. Assumes app is initialized and webhook is set."""
+        logger.info(f"Starting PTB internal webhook server on {listen_ip}:{listen_port}")
+        await self.application.run_webhook(
+            listen=listen_ip,
+            port=listen_port,
+            secret_token=secret_token,
+            webhook_url=webhook_url_for_ptb
+        )
+        logger.info("PTB webhook server has stopped.")

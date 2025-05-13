@@ -3,6 +3,8 @@ import asyncio
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import atexit
+
+from telegram import Update
 from telegram.ext import Application
 import config
 from self_market.db import crud
@@ -118,6 +120,21 @@ async def post_shutdown_tasks(app: Application | None = None): # Add the app arg
     logger.info("Post-shutdown tasks complete.")
 
 
+async def run_application_webhook(bot_instance: TelegramBot, webhook_url: str):
+    """
+    The main async function to initialize, set webhook, and run the PTB application.
+    This will be wrapped by `async with bot_instance.application:`
+    """
+    # `bot_instance.application.initialize()` is called by `async with bot_instance.application`
+    await bot_instance.set_bot_webhook(webhook_url, config.WEBHOOK_SECRET_TOKEN or None)
+    await bot_instance.run_ptb_webhook_server(
+        listen_ip=config.WEBHOOK_LISTEN_IP,
+        listen_port=config.WEBHOOK_LISTEN_PORT,
+        secret_token=config.WEBHOOK_SECRET_TOKEN or None,
+        webhook_url_for_ptb=webhook_url # Pass the full URL here
+    )
+
+
 def main_sync(): # Renamed to avoid confusion with async main
     """Synchronous entry point that sets up and runs the asyncio application."""
 
@@ -147,15 +164,14 @@ def main_sync(): # Renamed to avoid confusion with async main
     # `run_webhook` will block and manage its own loop interaction.
     # It also handles SIGINT/SIGTERM for graceful shutdown.
     # The post_init and post_shutdown tasks will be awaited by PTB.
+
     bot_instance.application.run_webhook(
         listen=config.WEBHOOK_LISTEN_IP,
         port=config.WEBHOOK_LISTEN_PORT,
         secret_token=config.WEBHOOK_SECRET_TOKEN or None,
         webhook_url=webhook_url,
-        # If PTB handles SSL directly (not via reverse proxy):
-        # Make sure TelegramBot.__init__ configures builder.webhook_params
-        # with "ssl_certfile" and "ssl_keyfile".
-        # This `run_webhook` call doesn't take those directly.
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True
     )
     logger.info("PTB Application run_webhook has finished.")
 
