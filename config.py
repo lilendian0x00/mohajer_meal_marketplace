@@ -41,7 +41,7 @@ BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES: int = int(os.environ.get("LIS
 BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES : int = int(os.environ.get("MEALS_UPDATE_CHECK_INTERVAL_MINUTES", "720"))
 
 # Default price limit for undefined meals
-DEFAULT_PRICE_LIMIT = int(os.environ.get("DEFAULT_PRICE_LIMIT", "25000"))
+DEFAULT_PRICE_LIMIT: int = int(os.environ.get("DEFAULT_PRICE_LIMIT", "25000"))
 
 # TODO: Add other configurable items here later (e.g., price limits, messages)
 
