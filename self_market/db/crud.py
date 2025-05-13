@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone, date, timedelta
 from decimal import Decimal
 from typing import Any, Coroutine
-from sqlalchemy import func, sum as sql_sum
+from sqlalchemy import func
 from sqlalchemy import or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -56,7 +56,7 @@ async def get_listings_count_by_status(db: AsyncSession, status: models.ListingS
 
 async def get_total_value_of_listings_by_status(db: AsyncSession, status: models.ListingStatus) -> Decimal:
     """Returns the total sum of prices for listings of a given status."""
-    stmt = select(sql_sum(models.Listing.price)).where(models.Listing.status == status)
+    stmt = select(func.sum(models.Listing.price)).where(models.Listing.status == status)
     result = await db.execute(stmt)
     total_value = result.scalar_one_or_none()
     return total_value if total_value is not None else Decimal('0.00')
