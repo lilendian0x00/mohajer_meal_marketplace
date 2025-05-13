@@ -22,7 +22,7 @@ CALLBACK_HISTORY_BACK_SELECT = "history_back_select"
 CALLBACK_HISTORY_NOOP = "history_noop"
 CALLBACK_LISTING_CANCEL_CONFIRM_YES = 'confirm_listing_yes'
 CALLBACK_LISTING_CANCEL_CONFIRM_NO = 'confirm_listing_no'
-
+CALLBACK_ADMIN_REFRESH_STATS = "admin_refresh_stats"
 
 # --- Main Menu Button Texts ---
 BTN_BUY_FOOD = "🛒 خرید غذا"

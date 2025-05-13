@@ -5,6 +5,7 @@ from datetime import date as GregorianDate, timezone  # Alias to avoid conflict 
 from datetime import datetime
 import jdatetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 from telegram.ext import (
     ContextTypes,
     ConversationHandler,
@@ -15,6 +16,7 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 from config import ADMIN_TELEGRAM_IDS, USERS_LIST_PAGE_SIZE
+from handlers import CALLBACK_ADMIN_REFRESH_STATS
 from self_market.db.session import get_db_session
 from self_market.db import crud
 from self_market import models
@@ -60,17 +62,31 @@ CALLBACK_ADDMEAL_TYPE_SHAM = f"{CALLBACK_ADDMEAL_TYPE_PREFIX}شام"   # Dinner
 
 @admin_required
 async def bot_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Displays comprehensive bot statistics for admins."""
+    """Displays comprehensive bot statistics for admins. Can be refreshed."""
+    query = update.callback_query
     message = update.message
-    if not message:
+    effective_message = message or (query.message if query else None) # Get the message to reply to or edit
+
+    if not effective_message:
+        logger.warning("bot_statistics called without a message or query context.")
         return
 
-    logger.info(f"Admin {update.effective_user.id} requested bot statistics.")
-    await message.reply_text("در حال جمع‌آوری آمار ربات...") # "Gathering bot statistics..."
+    user_id = update.effective_user.id
+    logger.info(f"Admin {user_id} requested bot statistics (via {'command' if message else 'button'}).")
+
+    # If it's a button press, answer the callback query first
+    if query:
+        try:
+            await query.answer("در حال بروزرسانی آمار...")
+        except BadRequest as e:
+            if "Query is too old" not in str(e) and "query id is invalid" not in str(e):
+                logger.warning(f"Error answering stats refresh callback for admin {user_id}: {e}")
+            # Continue even if answer fails for old query, try to edit
+    else: # It's a command, send an initial "gathering" message
+        await effective_message.reply_text("در حال جمع‌آوری آمار ربات...")
 
     try:
         async with get_db_session() as db_session:
-            # ... (data fetching code remains the same) ...
             total_users = await crud.get_total_users_count(db_session)
             admin_users = await crud.get_admin_users_count(db_session)
             verified_users = await crud.get_verified_users_count(db_session)
@@ -90,54 +106,86 @@ async def bot_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             total_meals = await crud.get_total_meals_count(db_session)
             active_meals = await crud.get_active_meals_count(db_session)
 
-            # Prepare the message using MarkdownV2
-            stats_message_parts = [
-                f"📊 *آمار کلی ربات*",
-                "─" * 20 + "\n",  # Separator
+        # Prepare the message using MarkdownV2
+        stats_message_parts = [
+            f"📊 *آمار کلی ربات*\n",
+            "─" * 20 + "\n",
 
-                f"👤 *بخش کاربران:*\n"
-                f"  ▫️ کل کاربران ثبت‌شده: `{total_users}` نفر\n"
-                f"  ▫️ کاربران ادمین: `{admin_users}` نفر\n"
-                f"  ▫️ کاربران تایید شده: `{verified_users}` نفر\n"
-                f"  ▫️ کاربران غیرفعال: `{inactive_users}` نفر\n",
+            f"👤 *بخش کاربران:*\n"
+            f"  ▫️ کل کاربران ثبت‌شده: `{total_users}` نفر\n"
+            f"  ▫️ کاربران ادمین: `{admin_users}` نفر\n"
+            f"  ▫️ کاربران تایید شده: `{verified_users}` نفر\n"
+            f"  ▫️ کاربران غیرفعال: `{inactive_users}` نفر\n",
 
-                f"🏷️ *بخش آگهی‌ها \\(لیستینگ‌ها\\):*\n"
-                f"  ✅ فروخته شده:\n"
-                f"    ▫️ تعداد: `{sold_listings_count}` عدد\n"
-                f"    ▫️ ارزش کل: `{sold_listings_value:,.0f}` تومان\n"
-                f"  🛒 موجود برای فروش:\n"
-                f"    ▫️ تعداد: `{available_listings_count}` عدد\n"
-                f"    ▫️ ارزش کل آگهی‌های موجود: `{available_listings_value:,.0f}` تومان\n"
-                f"  ⏳ در انتظار تایید فروشنده:\n"
-                f"    ▫️ تعداد: `{pending_listings_count}` عدد\n"
-                f"    ▫️ ارزش کل آگهی‌های در انتظار: `{pending_listings_value:,.0f}` تومان\n"
-                f"  ❌ لغو شده:\n"
-                f"    ▫️ تعداد: `{cancelled_listings_count}` عدد\n",
+            f"🏷️ *بخش آگهی‌ها \\(لیستینگ‌ها\\):*\n"
+            f"  ✅ فروخته شده:\n"
+            f"    ▫️ تعداد: `{sold_listings_count}` عدد\n"
+            f"    ▫️ ارزش کل: `{sold_listings_value:,.0f}` تومان\n"
+            f"  🛒 موجود برای فروش:\n"
+            f"    ▫️ تعداد: `{available_listings_count}` عدد\n"
+            f"    ▫️ ارزش کل آگهی‌های موجود: `{available_listings_value:,.0f}` تومان\n"
+            f"  ⏳ در انتظار تایید فروشنده:\n"
+            f"    ▫️ تعداد: `{pending_listings_count}` عدد\n"
+            f"    ▫️ ارزش کل آگهی‌های در انتظار: `{pending_listings_value:,.0f}` تومان\n"
+            f"  ❌ لغو شده:\n"
+            f"    ▫️ تعداد: `{cancelled_listings_count}` عدد\n",
 
-                f"🍲 *بخش غذاها \\(تعریف شده در سیستم\\):*\n"
-                f"  ▫️ کل غذاهای تعریف شده: `{total_meals}` نوع\n"
-                f"  ▫️ غذاهای فعال \\(امروز و آینده\\): `{active_meals}` نوع\n",
+            f"🍲 *بخش غذاها \\(تعریف شده در سیستم\\):*\n"
+            f"  ▫️ کل غذاهای تعریف شده: `{total_meals}` نوع\n"
+            f"  ▫️ غذاهای فعال \\(امروز و آینده\\): `{active_meals}` نوع\n",
 
-                "─" * 20 + "\n",
-                f"⏱️ آمار بروز شده در: `{escape_markdown_v2(datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z'))}`"
-            ]
+            "─" * 20 + "\n",
+            f"⏱️ آمار بروز شده در: `{escape_markdown_v2(datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z'))}`"
+        ]
 
-            full_stats_message = "\n".join(stats_message_parts)
+        full_stats_message = "\n".join(stats_message_parts)
 
-            # Ensure the message is not too long (Telegram limit is 4096 chars)
-            if len(full_stats_message) > 4096:
-                logger.warning("Statistics message is too long, might be truncated by Telegram.")
-                # Also escape parentheses in the truncation message if they exist and are literal
-                full_stats_message = full_stats_message[:4090] + "\n\n\\.\\.\\.\\(پیام خلاصه شد\\)"
+        if len(full_stats_message) > 4096:
+            logger.warning("Statistics message is too long, might be truncated by Telegram.")
+            full_stats_message = full_stats_message[:4090] + "\n\n\\.\\.\\.\\(پیام خلاصه شد\\)"
 
-            await message.reply_text(
+        # Create the inline keyboard with the refresh button
+        keyboard = [[
+            InlineKeyboardButton("🔄 به روز رسانی آمار", callback_data=CALLBACK_ADMIN_REFRESH_STATS)
+        ]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        if query: # If triggered by button, edit the existing message
+            try:
+                await query.edit_message_text(
+                    text=full_stats_message,
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=reply_markup
+                )
+            except BadRequest as e:
+                if "Message is not modified" in str(e):
+                    logger.info(f"Stats refresh for admin {user_id} resulted in no changes to the message content.")
+                    # answer the query to indicate no change if not already done by the initial answer.
+                    await query.answer("آمار تغییری نکرده است.")
+                elif "Query is too old" in str(e) or "query id is invalid" in str(e):
+                     logger.warning(f"Failed to edit stats message due to old query for admin {user_id}: {e}")
+                else:
+                    logger.error(f"BadRequest editing stats message for admin {user_id}: {e}", exc_info=True)
+            except Exception as e_edit:
+                 logger.error(f"Error editing stats message for admin {user_id}: {e_edit}", exc_info=True)
+
+        else: # If triggered by command, send a new message
+            await effective_message.reply_text(
                 text=full_stats_message,
-                parse_mode=ParseMode.MARKDOWN_V2
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=reply_markup
             )
 
     except Exception as e:
-        logger.error(f"Error generating bot statistics: {e}", exc_info=True)
-        await message.reply_text("متاسفانه در دریافت آمار خطایی رخ داد. لطفا دوباره تلاش کنید.")
+        logger.error(f"Error generating bot statistics for admin {user_id}: {e}", exc_info=True)
+        error_text = "متاسفانه در دریافت آمار خطایی رخ داد. لطفا دوباره تلاش کنید."
+        if query:
+            try:
+                await query.edit_message_text(error_text) # Try to edit to show error
+            except: # If edit fails, fall back to sending new message
+                await context.bot.send_message(chat_id=user_id, text=error_text)
+        elif effective_message:
+            await effective_message.reply_text(error_text)
 
 # User Management Handlers
 @admin_required
