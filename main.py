@@ -2,21 +2,17 @@ import logging
 import asyncio
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import atexit
-
 from telegram import Update
 from telegram.ext import Application
 import config
 from self_market.db import crud
 from background_tasks import check_pending_listings_timeout, update_meals_from_samad
-from config import BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES, PENDING_TIMEOUT_MINUTES
+from config import BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES, PENDING_TIMEOUT_MINUTES, BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES
 from bot import TelegramBot
 from self_market.db.session import init_db, get_db_session
 
 logger = logging.getLogger(__name__)
-scheduler: AsyncIOScheduler | None = None
-ptb_application_instance: Application | None = None # To reference for shutdown
-
+scheduler_ref: AsyncIOScheduler | None = None # Renamed from 'scheduler' for clarity with global scope
 
 async def synchronize_admin_permissions():
     """
@@ -24,13 +20,11 @@ async def synchronize_admin_permissions():
     Grants admin to users in the config list and revokes from those not in it.
     """
     logger.info("Starting admin permissions synchronization with config...")
-    # Ensure ADMIN_TELEGRAM_IDS is the list of integers
     config_admin_ids = set(config.ADMIN_TELEGRAM_IDS)
     granted_count = 0
     revoked_count = 0
 
-    async with get_db_session() as db:  # Use your async session manager
-        # Ensure users in ADMIN_TELEGRAM_IDS are admins
+    async with get_db_session() as db:
         if not config_admin_ids:
             logger.info(
                 "ADMIN_TELEGRAM_IDS in config is empty. No users will be specifically granted admin status by this step.")
@@ -40,20 +34,16 @@ async def synchronize_admin_permissions():
             if user:
                 if not user.is_admin:
                     await crud.set_user_admin_state(db, tg_id, True)
-                    # The crud.set_user_admin_state function already logs the change
                     granted_count += 1
             else:
-                # We only update existing users.
                 logger.warning(f"Admin ID {tg_id} from config.py is not found in the database. "
                                f"User needs to interact with the bot first to be created. "
                                f"They will not be made admin by this sync until they exist in the DB.")
 
-        # Revoke admin from users in DB who are NOT in ADMIN_TELEGRAM_IDS
         current_db_admins = await crud.get_all_db_admin_users(db)
         for db_admin_user in current_db_admins:
             if db_admin_user.telegram_id not in config_admin_ids:
                 await crud.set_user_admin_state(db, db_admin_user.telegram_id, False)
-                # The crud.set_user_admin_state function already logs the change
                 revoked_count += 1
 
     if granted_count > 0 or revoked_count > 0:
@@ -68,13 +58,19 @@ async def perform_startup_tasks(ptb_app: Application):
     global scheduler_ref
     logger.info("Performing startup tasks...")
 
+    logger.info(f"Using Database: {config.DATABASE_URL}") # Added from old main.py
+
     # Initialize DB
     try:
         logger.info("Initializing database schema...")
         await init_db()
     except Exception as e:
         logger.error(f"Database initialization failed: {e}. Aborting startup.", exc_info=True)
-        raise SystemExit("DB Init Failed") # Stop further execution
+        # PTB's post_init doesn't have a direct way to stop the bot launch if an error occurs here.
+        # Raising SystemExit is a hard stop. Consider if a more graceful signal to PTB is possible
+        # or if logging the error and letting PTB try to start (and likely fail if DB is crucial) is preferred.
+        # For now, following the original intent of stopping.
+        raise SystemExit("DB Init Failed")
 
     # Synchronize Admin Permissions
     try:
@@ -84,123 +80,134 @@ async def perform_startup_tasks(ptb_app: Application):
         # Non-fatal, bot can continue
 
     # Scheduler Setup
-    scheduler_ref = AsyncIOScheduler(timezone="UTC")
+    scheduler_ref = AsyncIOScheduler(timezone="UTC") # Use UTC or your preferred timezone
+
+    # Add listing timeout checker job
     scheduler_ref.add_job(
         check_pending_listings_timeout,
         trigger='interval',
-        next_run_time=datetime.now(),
+        next_run_time=datetime.now(), # Run immediately then interval
         minutes=BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES,
         id='check_timeouts_job',
         replace_existing=True,
-        kwargs={'app': ptb_app} # Pass the PTB application instance
+        kwargs={'app': ptb_app}
     )
+    logger.info( # Added from old main.py, corrected to use the actual interval variable
+        f"Scheduled background task 'check_pending_listings_timeout' to run every {BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES} minutes.")
+
+    # Add meal updater job
     scheduler_ref.add_job(
         update_meals_from_samad,
         trigger='interval',
-        next_run_time=datetime.now(),
-        minutes=config.BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES,
+        next_run_time=datetime.now(), # Run immediately then interval
+        minutes=BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES, # Using the specific config for this job
         id='update_meals_from_samad',
         replace_existing=True,
-        misfire_grace_time=None,
-        kwargs={'app': ptb_app} # Pass the PTB application instance
+        misfire_grace_time=None, # Or some appropriate value
+        kwargs={'app': ptb_app}
     )
+    logger.info( # Added logging for the second job for consistency
+        f"Scheduled background task 'update_meals_from_samad' to run every {BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES} minutes.")
+
     scheduler_ref.start()
     logger.info("APScheduler started.")
     logger.info("Startup tasks complete.")
 
 
-async def post_shutdown_tasks(app: Application | None = None): # Add the app argument
+async def post_shutdown_tasks(app: Application | None = None): # app argument provided by PTB
     """Tasks to run after PTB application has shut down."""
-    global scheduler_ref # Use the global reference
+    global scheduler_ref
     logger.info("Performing post-shutdown tasks...")
     if scheduler_ref and scheduler_ref.running:
         logger.info("Shutting down APScheduler in post_shutdown_tasks...")
-        scheduler_ref.shutdown(wait=False) # wait=False for async
-        logger.info("APScheduler shutdown call initiated in post_shutdown_tasks.")
+        scheduler_ref.shutdown(wait=True) # wait=True is fine for async def if PTB awaits this properly
+        logger.info("APScheduler shutdown complete in post_shutdown_tasks.")
+    # If ptb_app instance was needed here, the 'app' argument should be used.
     logger.info("Post-shutdown tasks complete.")
 
 
-async def run_application_webhook(bot_instance: TelegramBot, webhook_url: str):
-    """
-    The main async function to initialize, set webhook, and run the PTB application.
-    This will be wrapped by `async with bot_instance.application:`
-    """
-    # `bot_instance.application.initialize()` is called by `async with bot_instance.application`
-    await bot_instance.set_bot_webhook(webhook_url, config.WEBHOOK_SECRET_TOKEN or None)
-    await bot_instance.run_ptb_webhook_server(
-        listen_ip=config.WEBHOOK_LISTEN_IP,
-        listen_port=config.WEBHOOK_LISTEN_PORT,
-        secret_token=config.WEBHOOK_SECRET_TOKEN or None,
-        webhook_url_for_ptb=webhook_url # Pass the full URL here
-    )
-
-
-def main_sync(): # Renamed to avoid confusion with async main
-    """Synchronous entry point that sets up and runs the asyncio application."""
+def main_sync():
+    """Synchronous entry point that sets up and runs the asyncio application for webhook."""
 
     # Token Check
     if not config.TELEGRAM_BOT_TOKEN or config.TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        logger.error("FATAL: Telegram Bot Token missing in config.")
+        logger.error("FATAL: Telegram Bot Token missing in config. Bot will not start.")
         return
 
-    # Webhook Specific Checks
+    # Webhook Specific Checks (from new version)
     if not config.WEBHOOK_BASE_URL:
         logger.error("FATAL: WEBHOOK_BASE_URL is not set in config. Cannot start in webhook mode.")
         return
-    webhook_url = f"{config.WEBHOOK_BASE_URL.rstrip('/')}/{config.TELEGRAM_BOT_TOKEN}"
+
+    # The full webhook URL for Telegram will be set via set_webhook.
+    webhook_url_path = f"/{config.TELEGRAM_BOT_TOKEN.strip('/')}" # Ensure leading slash, no trailing
+    full_webhook_url_for_telegram = f"{config.WEBHOOK_BASE_URL.rstrip('/')}{webhook_url_path}"
 
     logger.info("Creating TelegramBot instance...")
-    # Pass SSL cert/key to __init__ if PTB is to handle SSL.
-    # Otherwise, for reverse proxy, these are not needed here.
-    bot_instance = TelegramBot(token=config.TELEGRAM_BOT_TOKEN)
-    ptb_app = bot_instance.application
+    try:
+        bot_instance = TelegramBot(token=config.TELEGRAM_BOT_TOKEN)
+        ptb_app = bot_instance.application
+    except ValueError as e: # Catch potential token error from Bot __init__
+         logger.error(f"Failed to create bot instance (ValueError): {e}", exc_info=True)
+         return
+    except Exception as e: # Catch any other error during bot instantiation
+        logger.error(f"Failed to create bot instance (Exception): {e}", exc_info=True)
+        return
+
 
     # --- Configure PTB Application with startup/shutdown tasks ---
-    # These run within the Application's own lifecycle management
-    ptb_app.post_init = perform_startup_tasks  # PTB passes the application instance here automatically
-    ptb_app.post_shutdown = post_shutdown_tasks  # PTB passes the application instance here automatically
+    ptb_app.post_init = perform_startup_tasks
+    ptb_app.post_shutdown = post_shutdown_tasks
 
     logger.info("Starting PTB Application with webhook server...")
-    # `run_webhook` will block and manage its own loop interaction.
-    # It also handles SIGINT/SIGTERM for graceful shutdown.
-    # The post_init and post_shutdown tasks will be awaited by PTB.
+    logger.info(f"Webhook: Telegram will be told to send updates to: {full_webhook_url_for_telegram}")
+    logger.info(f"Webhook: PTB will listen on IP: {config.WEBHOOK_LISTEN_IP}, Port: {config.WEBHOOK_LISTEN_PORT}, Path: {webhook_url_path}")
 
-    logger.info(f"PTB run_webhook will be called with webhook_url: {webhook_url}")
-    bot_instance.application.run_webhook(
-        listen=config.WEBHOOK_LISTEN_IP,
-        port=config.WEBHOOK_LISTEN_PORT,
-        secret_token=config.WEBHOOK_SECRET_TOKEN or None,
-        webhook_url=webhook_url,
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
-        url_path=f"/{config.TELEGRAM_BOT_TOKEN}",
-    )
+    try:
+        ptb_app.run_webhook(
+            listen=config.WEBHOOK_LISTEN_IP,
+            port=config.WEBHOOK_LISTEN_PORT,
+            secret_token=config.WEBHOOK_SECRET_TOKEN or None,
+            webhook_url=full_webhook_url_for_telegram,
+            url_path=webhook_url_path,
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=False,
+        )
+    except RuntimeError as e: # Catch potential handler registration or other PTB setup error
+        logger.error(f"Failed during PTB run_webhook setup: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"An unexpected error occurred running the PTB webhook: {e}", exc_info=True)
+
     logger.info("PTB Application run_webhook has finished.")
 
 
 # Entry Point
 if __name__ == "__main__":
-    # Basic logging setup can happen before asyncio.run
+    # Basic logging setup can happen before asyncio.run or PTB's own loop starts
     try:
         logging.basicConfig(
             format=config.LOG_FORMAT, level=config.LOG_LEVEL, force=True
         )
-        logging.getLogger("httpx").setLevel(logging.WARNING)
-        logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+        logging.getLogger("httpx").setLevel(logging.WARNING) # From old
+        logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING) # From old
+        # Define logger here if not already defined at module level, but it is.
         logger.info("Logging setup complete.")
     except Exception as e:
-        logging.basicConfig(level=logging.ERROR) # Fallback basic logging
-        logger = logging.getLogger(__name__) # Ensure logger is defined
+        # Fallback basic logging if setup fails
+        logging.basicConfig(level=logging.ERROR)
+        logger = logging.getLogger(__name__) # Re-ensure logger is defined
         logger.error(f"Logging setup failed: {e}", exc_info=True)
 
     logger.info("Starting application...")
     try:
-        # PTB's run_webhook will create/manage the loop internally when called this way.
-        # We don't use asyncio.run() around it.
+        # PTB's run_webhook/run_polling creates and manages the asyncio loop.
+        # We don't need asyncio.run() around main_sync() for this PTB setup.
         main_sync()
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Application received KeyboardInterrupt/SystemExit. Exiting.")
-    except Exception as e:
+    except (KeyboardInterrupt, SystemExit) as e:
+        logger.info(f"Application received {type(e).__name__}. Exiting gracefully.")
+    except Exception as e: # Catch any other unexpected errors at the top level
         logger.error(f"Unhandled exception at top application level: {e}", exc_info=True)
     finally:
+        # This will be reached after main_sync() completes (i.e., PTB stops)
+        # or if an exception causes an exit from the try block.
         logger.info("Application finished.")
