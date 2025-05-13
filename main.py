@@ -61,56 +61,65 @@ async def synchronize_admin_permissions():
         logger.info(
             "Admin permissions synchronization complete. No changes to admin statuses were needed based on the current config.")
 
-
-async def initial_setup(app_for_scheduler: Application):
-    """Performs all async setup tasks before starting the bot's main loop."""
-    global scheduler
-    logger.info("Performing initial async setup...")
+async def perform_startup_tasks(ptb_app: Application):
+    """All async tasks that need to run before the bot starts listening."""
+    global scheduler_ref
+    logger.info("Performing startup tasks...")
 
     # Initialize DB
     try:
         logger.info("Initializing database schema...")
         await init_db()
     except Exception as e:
-        logger.error(f"Database initialization failed: {e}. Bot will not start.", exc_info=True)
-        raise  # Re-raise to stop startup
+        logger.error(f"Database initialization failed: {e}. Aborting startup.", exc_info=True)
+        raise SystemExit("DB Init Failed") # Stop further execution
 
     # Synchronize Admin Permissions
     try:
         await synchronize_admin_permissions()
     except Exception as e:
         logger.error(f"Failed to synchronize admin permissions during startup: {e}", exc_info=True)
-        # Continue even if this fails, but log it.
+        # Non-fatal, bot can continue
 
     # Scheduler Setup
-    scheduler = AsyncIOScheduler(timezone="UTC")
-    scheduler.add_job(
+    scheduler_ref = AsyncIOScheduler(timezone="UTC")
+    scheduler_ref.add_job(
         check_pending_listings_timeout,
         trigger='interval',
-        next_run_time=datetime.now(), # Start soon
+        next_run_time=datetime.now(),
         minutes=BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES,
         id='check_timeouts_job',
         replace_existing=True,
-        kwargs={'app': app_for_scheduler} # Pass the PTB application
+        kwargs={'app': ptb_app} # Pass the PTB application instance
     )
-    scheduler.add_job(
+    scheduler_ref.add_job(
         update_meals_from_samad,
         trigger='interval',
-        next_run_time=datetime.now(), # Start soon
+        next_run_time=datetime.now(),
         minutes=config.BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES,
         id='update_meals_from_samad',
         replace_existing=True,
         misfire_grace_time=None,
-        kwargs={'app': app_for_scheduler} # Pass the PTB application
+        kwargs={'app': ptb_app} # Pass the PTB application instance
     )
-    scheduler.start()
+    scheduler_ref.start()
     logger.info("APScheduler started.")
-    logger.info("Initial async setup complete.")
+    logger.info("Startup tasks complete.")
 
 
-async def app_main():
-    """Main coroutine to set up and run the bot."""
-    global ptb_application_instance, scheduler
+async def post_shutdown_tasks():
+    """Tasks to run after PTB application has shut down."""
+    global scheduler_ref
+    logger.info("Performing post-shutdown tasks...")
+    if scheduler_ref and scheduler_ref.running:
+        logger.info("Shutting down APScheduler in post_shutdown_tasks...")
+        scheduler_ref.shutdown(wait=False) # wait=False for async
+        logger.info("APScheduler shutdown call initiated in post_shutdown_tasks.")
+    logger.info("Post-shutdown tasks complete.")
+
+
+def main_sync(): # Renamed to avoid confusion with async main
+    """Synchronous entry point that sets up and runs the asyncio application."""
 
     # Token Check
     if not config.TELEGRAM_BOT_TOKEN or config.TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
@@ -124,75 +133,56 @@ async def app_main():
     webhook_url = f"{config.WEBHOOK_BASE_URL.rstrip('/')}/{config.TELEGRAM_BOT_TOKEN}"
 
     logger.info("Creating TelegramBot instance...")
+    # Pass SSL cert/key to __init__ if PTB is to handle SSL.
+    # Otherwise, for reverse proxy, these are not needed here.
     bot_instance = TelegramBot(token=config.TELEGRAM_BOT_TOKEN)
-    ptb_application_instance = bot_instance.application # Store for potential shutdown signal
+    ptb_app = bot_instance.application
 
-    # Perform initial async setup (DB, Scheduler)
-    try:
-        await initial_setup(ptb_application_instance)
-    except Exception as e_setup:
-        logger.error(f"Critical error during initial setup: {e_setup}. Aborting.", exc_info=True)
-        # Ensure scheduler is stopped if it started
-        if scheduler and scheduler.running:
-            scheduler.shutdown(wait=False)
-        return # Stop if initial setup fails
+    # --- Configure PTB Application with startup/shutdown tasks ---
+    # These run within the Application's own lifecycle management
+    ptb_app.post_init = lambda app_param=ptb_app: perform_startup_tasks(app_param) # Pass app to startup tasks
+    ptb_app.post_shutdown = post_shutdown_tasks
 
-    # Now, run the bot's webhook server. This will block until stopped.
-    try:
-        logger.info("Starting bot's webhook server...")
-        await bot_instance.run_webhook_server(
-            webhook_url=webhook_url,
-            listen_ip=config.WEBHOOK_LISTEN_IP,
-            listen_port=config.WEBHOOK_LISTEN_PORT,
-            secret_token=config.WEBHOOK_SECRET_TOKEN or None
-        )
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Webhook server interrupted. PTB's context manager should handle its cleanup.")
-    except Exception as e_run:
-        logger.error(f"Error running webhook server: {e_run}", exc_info=True)
-    finally:
-        logger.info("Webhook server has finished or been interrupted.")
-        # PTB's `async with self.application` in `bot_instance.run_webhook_server`
-        # handles PTB application shutdown (including webhook deletion).
-        # We just need to ensure our scheduler is stopped.
-        if scheduler and scheduler.running:
-            logger.info("Shutting down APScheduler in app_main finally...")
-            scheduler.shutdown(wait=False)
-            logger.info("APScheduler shutdown call initiated.")
+    logger.info("Starting PTB Application with webhook server...")
+    # `run_webhook` will block and manage its own loop interaction.
+    # It also handles SIGINT/SIGTERM for graceful shutdown.
+    # The post_init and post_shutdown tasks will be awaited by PTB.
+    bot_instance.application.run_webhook(
+        listen=config.WEBHOOK_LISTEN_IP,
+        port=config.WEBHOOK_LISTEN_PORT,
+        secret_token=config.WEBHOOK_SECRET_TOKEN or None,
+        webhook_url=webhook_url,
+        # If PTB handles SSL directly (not via reverse proxy):
+        # Make sure TelegramBot.__init__ configures builder.webhook_params
+        # with "ssl_certfile" and "ssl_keyfile".
+        # This `run_webhook` call doesn't take those directly.
+    )
+    logger.info("PTB Application run_webhook has finished.")
+
 
 # Entry Point
 if __name__ == "__main__":
-    logger.info("Starting application...")
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
+    # Basic logging setup can happen before asyncio.run
     try:
-        loop.run_until_complete(app_main())
-    except KeyboardInterrupt:
-        logger.info("Application received KeyboardInterrupt. Main loop exiting.")
+        logging.basicConfig(
+            format=config.LOG_FORMAT, level=config.LOG_LEVEL, force=True
+        )
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+        logger.info("Logging setup complete.")
     except Exception as e:
-        logger.error(f"Unhandled exception at top level: {e}", exc_info=True)
+        logging.basicConfig(level=logging.ERROR) # Fallback basic logging
+        logger = logging.getLogger(__name__) # Ensure logger is defined
+        logger.error(f"Logging setup failed: {e}", exc_info=True)
+
+    logger.info("Starting application...")
+    try:
+        # PTB's run_webhook will create/manage the loop internally when called this way.
+        # We don't use asyncio.run() around it.
+        main_sync()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Application received KeyboardInterrupt/SystemExit. Exiting.")
+    except Exception as e:
+        logger.error(f"Unhandled exception at top application level: {e}", exc_info=True)
     finally:
-        logger.info("Cleaning up event loop...")
-        # Gracefully close remaining tasks, etc.
-        # This part can be complex. For now, just close.
-        # Further shutdown logic for the scheduler if it wasn't stopped.
-        if scheduler and scheduler.running: # Double check
-            logger.warning("Scheduler still running during final cleanup. Attempting shutdown.")
-            scheduler.shutdown(wait=False)
-
-        # A more robust loop cleanup:
-        try:
-            pending = asyncio.all_tasks(loop=loop)
-            if pending:
-                logger.info(f"Cancelling {len(pending)} outstanding tasks...")
-                for task in pending:
-                    task.cancel()
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-        except Exception as e_cancel:
-            logger.error(f"Error cancelling pending tasks: {e_cancel}")
-        finally:
-            logger.info("Closing event loop.")
-            loop.close()
-
         logger.info("Application finished.")
