@@ -1,19 +1,21 @@
-FROM python:3.12-slim
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock* ./
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
 
-RUN uv sync --locked
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --locked --no-install-project --no-dev
 
-COPY main.py .
-COPY bot.py .
-COPY config.py .
-COPY background_tasks.py .
-COPY utility.py .
-COPY handlers /app/handlers
-COPY self_market /app/self_market
+COPY . /app
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev
+
+ENV PATH="/app/.venv/bin:$PATH"
 
 # ENVS
 ENV TELEGRAM_BOT_TOKEN="YOUR_BOT_TOKEN_HERE_RUNTIME"
