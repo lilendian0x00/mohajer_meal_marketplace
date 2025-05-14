@@ -9,7 +9,7 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock* ./
 
-RUN uv pip install --no-cache --frozen-lockfile --target /install
+RUN uv pip install --target /install
 
 # Final Stage
 FROM python:3.12-slim
