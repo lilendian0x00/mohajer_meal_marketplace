@@ -1,22 +1,11 @@
-# Build Stage
-FROM python:3.12-slim as builder
-
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+FROM python:3.12-slim
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
 COPY pyproject.toml uv.lock* ./
 
-RUN uv pip install --system . --target /install
-
-RUN uv pip install . --target /install
-
-# Final Stage
-FROM python:3.12-slim
-WORKDIR /app
-
-# Copy installed packages from the builder stage
-COPY --from=builder /install /usr/local/lib/python3.12/site-packages/
+RUN uv sync --locked
 
 COPY main.py .
 COPY bot.py .
