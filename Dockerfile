@@ -1,5 +1,3 @@
-# Dockerfile
-
 # Build Stage
 FROM python:3.12-slim as builder
 
@@ -9,7 +7,9 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock* ./
 
-RUN uv pip install --target /install
+RUN uv pip install --system . --target /install
+
+RUN uv pip install . --target /install
 
 # Final Stage
 FROM python:3.12-slim
