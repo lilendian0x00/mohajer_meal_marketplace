@@ -5,3 +5,5 @@ venv
 __pycache__/
 self_market.db
 bot_persistence
+self_market_test.db
+bot_persistence_test
