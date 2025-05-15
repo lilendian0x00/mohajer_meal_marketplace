@@ -14,8 +14,6 @@ from .. import models
 # Logger instance for this module
 logger = logging.getLogger(__name__)
 
-db_file_path = "/data/self_market.db"
-
 engine = create_async_engine(
     "sqlite+aiosqlite:///"+DATABASE_URL,
     echo=False

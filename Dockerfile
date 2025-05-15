@@ -5,13 +5,16 @@ WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy
 
+# Install uv and project dependencies
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync --locked --no-install-project --no-dev
 
+# Copy the rest of your application
 COPY . /app
 
+# Installs alembic if it's in pyproject.toml
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev
 
@@ -31,4 +34,9 @@ ENV BOT_MODE="dev"
 ENV SAMAD_API_USERNAME="YOUR_SAMAD_USERNAME_RUNTIME"
 ENV SAMAD_API_PASSWORD="YOUR_SAMAD_PASSWORD_RUNTIME"
 
+# Copy the entrypoint script and make it executable
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["uv","run", "main.py"]

@@ -27,6 +27,7 @@ class ListingStatus(enum.Enum):
     AWAITING_CONFIRMATION = 'awaiting_confirmation' # Buyer committed, waiting for seller payment confirmation
     SOLD = 'sold'
     CANCELLED = 'cancelled'
+    EXPIRED = 'expired'
     # CANCELED = 'canceled' # TODO: Consider adding later
     # Add other statuses if needed: CANCELED, DISPUTED etc.
 
@@ -161,6 +162,8 @@ class Listing(Base):
     sold_at = Column(DateTime(timezone=True), nullable=True) # When the sale was finalized
     pending_until = Column(DateTime(timezone=True), nullable=True) # Purchase timeout
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
+
+    buyer_notified_payment_at = Column(DateTime(timezone=True), nullable=True)
 
     cancelled_by_buyer_at = Column(DateTime(timezone=True), nullable=True)  # Track if buyer cancelled pending
     rejected_by_seller_at = Column(DateTime(timezone=True), nullable=True)  # Track if seller rejected pending
