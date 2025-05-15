@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Update
 from telegram.ext import Application
@@ -99,7 +99,7 @@ async def perform_startup_tasks(ptb_app: Application):
     scheduler_ref.add_job(
         update_meals_from_samad,
         trigger='interval',
-        next_run_time=datetime.now(), # Run immediately then interval
+        next_run_time=datetime.now(timezone.utc), # Run immediately then interval
         minutes=BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES, # Using the specific config for this job
         id='update_meals_from_samad',
         replace_existing=True,

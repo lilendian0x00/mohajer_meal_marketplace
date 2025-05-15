@@ -217,8 +217,8 @@ async def update_meals_from_samad(app: PTBApplication = None): # Added app param
     if not SAMAD_API_USERNAME or SAMAD_API_USERNAME == "YOUR_SAMAD_USERNAME" \
         or not SAMAD_API_PASSWORD or SAMAD_API_PASSWORD == "YOUR_SAMAD_PASSWORD":
             logger.error("Samad API username or password not configured. Skipping meal update.")
+            return
 
-    return
     BASE_URL = "https://saba.nus.ac.ir"
     TOKEN_URL = f"{BASE_URL}/oauth/token"
     MEALS_URL_TEMPLATE = f"{BASE_URL}/rest/programs/v2?selfId=158&weekStartDate={{week_start_date}}"
