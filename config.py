@@ -56,7 +56,7 @@ HISTORY_PAGE_SIZE: int = 5  # How many items to show per page in history view
 USERS_LIST_PAGE_SIZE: int = 30  # How many items to show per page in admin users list `/userslist`
 PENDING_TIMEOUT_MINUTES: int = int(os.environ.get("PENDING_TIMEOUT_MINUTES", "1440")) # How long (in minutes) a listing can stay in AWAITING_CONFIRMATION before timeout
 # How often (in minutes) the listing timeout is checked
-BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES: int = int(os.environ.get("LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES", "5"))
+BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES: int = int(os.environ.get("LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES", "720"))
 # How often (in minutes) the meals are updated from the samad.app
 BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES : int = int(os.environ.get("MEALS_UPDATE_CHECK_INTERVAL_MINUTES", "720"))
 # Default price limit for undefined meals
