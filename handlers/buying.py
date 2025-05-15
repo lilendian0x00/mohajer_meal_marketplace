@@ -658,7 +658,7 @@ async def handle_buyer_payment_sent(update: Update, context: ContextTypes.DEFAUL
 
     # Prepare dynamic parts (escape them individually)
     buyer_display_name_escaped = utility.escape_markdown_v2(
-        user.username or user.first_name or f"ID: {user.id}")
+        f"@{user.username}" or user.first_name or f"ID: {user.id}")
     listing_meal_desc_escaped = utility.escape_markdown_v2(listing_meal_desc_raw)
 
     # Construct seller notification text carefully for MarkdownV2
@@ -958,7 +958,7 @@ async def handle_seller_confirmation(update: Update, context: ContextTypes.DEFAU
         )
 
         logger.info(
-            f"SELLER MSG EDIT (SUCCESS): Attempting to edit seller's message to: {escaped_success_edit_text}")  # YOUR ADDED LOG
+            f"SELLER MSG EDIT (SUCCESS): Attempting to edit seller's message to: {escaped_success_edit_text}")
         try:
             await query.edit_message_text(
                 text=escaped_success_edit_text,
