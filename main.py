@@ -221,9 +221,9 @@ if __name__ == "__main__":
     logger.info(f"Starting application in {config.BOT_MODE.upper()} mode...")
 
     try:
-        if config.BOT_MODE == "dev":
+        if config.BOT_MODE == "production":
             run_webhook_mode()
-        elif config.BOT_MODE == "production":
+        elif config.BOT_MODE == "dev":
             run_polling_mode()
         else:
             # This case should be caught by config.py, but as a safeguard:
