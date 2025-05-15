@@ -222,6 +222,11 @@ class TelegramBot:
                 handlers.handle_confirm_purchase, pattern=r'^confirm_buy_\d+$'
             ), group=1)
 
+            # Buyer signals they have sent payment
+            self.application.add_handler(CallbackQueryHandler(
+                handlers.handle_buyer_payment_sent, pattern=fr'^{handlers.CALLBACK_BUYER_PAYMENT_SENT}_\d+$'
+            ), group=1)
+
             # Buyer Cancellation
             self.application.add_handler(CallbackQueryHandler(
                 handlers.handle_cancel_purchase, pattern=r'^cancel_buy$'

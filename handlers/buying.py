@@ -1,5 +1,9 @@
 import io
 import logging
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.error import Forbidden, BadRequest
@@ -9,7 +13,7 @@ from telegram.helpers import escape_markdown
 from . import PERSIAN_DAYS_MAP
 from .common import (
     CALLBACK_BUY_REFRESH, CALLBACK_BUYER_CANCEL_PENDING,
-    CALLBACK_SELLER_REJECT_PENDING, get_main_menu_keyboard
+    CALLBACK_SELLER_REJECT_PENDING, get_main_menu_keyboard, CALLBACK_BUYER_PAYMENT_SENT
 )
 import utility
 from self_market.db.session import get_db_session
@@ -378,6 +382,7 @@ async def handle_confirm_purchase(update: Update, context: ContextTypes.DEFAULT_
     updated_listing: models.Listing | None = None
     seller_card_number: str | None = None
     seller_telegram_id: int | None = None
+    seller_username: str | None = None
     error_message = "خطا در پردازش درخواست خرید. لطفا دوباره تلاش کنید." # Default error
 
     try:
@@ -391,29 +396,25 @@ async def handle_confirm_purchase(update: Update, context: ContextTypes.DEFAULT_
 
             # Check Failure Reason IF update failed
             if not updated_listing:
-                # CRUD function returned None, meaning pre-check failed (logged in CRUD)
-                # Re-fetch listing to determine specific reason for user message
-                listing_check = await crud.get_listing_by_id(db_session, listing_id)  # Use same session
-
-                # Set specific user-facing error message based on re-check
-                if listing_check and listing_check.seller_id == user.id:
-                    error_message = "شما نمی‌توانید آگهی خودتان را بخرید."  # Specific message
+                listing_check = await crud.get_listing_by_id(db_session, listing_id)
+                buyer_user_check = await crud.get_user_by_telegram_id(db_session, user.id)
+                if listing_check and buyer_user_check and listing_check.seller_id == buyer_user_check.id:
+                    error_message = "شما نمی‌توانید آگهی خودتان را بخرید."
                 elif listing_check and listing_check.status != models.ListingStatus.AVAILABLE:
-                    error_message = f"متاسفانه این آگهی دیگر برای خرید موجود نیست (وضعیت: {listing_check.status.value})."  # Specific message
+                    error_message = f"متاسفانه این آگهی دیگر برای خرید موجود نیست (وضعیت: {listing_check.status.value})."
                 elif not listing_check:
-                    error_message = "متاسفانه این آگهی یافت نشد."  # Specific message
+                    error_message = "متاسفانه این آگهی یافت نشد."
                 else:
-                    # Default if reason isn't clear from re-check
                     error_message = "خطا در بروزرسانی وضعیت آگهی."
-
             elif updated_listing:
                 if updated_listing.seller:
                     seller_card_number = updated_listing.seller.credit_card_number
                     seller_telegram_id = updated_listing.seller.telegram_id
+                    seller_username = updated_listing.seller.username  # Get username
                 else:
                     logger.error(f"Listing {listing_id} seller info could not be loaded after update.")
                     error_message = "خطا: اطلاعات فروشنده یافت نشد."
-                    updated_listing = None  # Mark as failed for subsequent logic
+                    updated_listing = None
 
     except Exception as e:
         logger.error(f"Error setting listing {listing_id} to awaiting confirmation: {e}", exc_info=True)
@@ -423,60 +424,70 @@ async def handle_confirm_purchase(update: Update, context: ContextTypes.DEFAULT_
     # Notify Buyer and Seller
     if updated_listing and seller_card_number and seller_telegram_id:
         price_str = f"{updated_listing.price:,.0f}" if updated_listing.price is not None else "مبلغ"
-        # Escape meal_desc for V2 *before* using it in the f-string for buyer
         raw_meal_description = updated_listing.meal.description if updated_listing.meal else "غذا"
 
-        # Construct parts and escape them as needed for MARKDOWN_V2
         part1 = f"درخواست خرید شما برای آگهی "
-        part2_listing_id = f"`{listing_id}`"  # listing_id is an int, safe in backticks
+        part2_listing_id = f"`{listing_id}`"
         part3_meal_intro = f" ("
-        # meal_desc_escaped should be the result of utility.escape_markdown_v2(raw_meal_description)
         part4_meal_desc = utility.escape_markdown_v2(raw_meal_description)
-        part5_meal_outro_and_status = f") ثبت شد.\n"  # Note the period here
-
+        part5_meal_outro_and_status = f") ثبت شد.\n"
         part6_payment_instruction1 = f"⏳ لطفا مبلغ "
-        # **{price_str} تومان** - bold is V2 syntax, price_str is numeric
-        part7_price = f"*{utility.escape_markdown_v2(price_str)} تومان*"  # Escape price_str just in case, then bold
-        part8_payment_instruction2 = f" را به شماره کارت زیر واریز نمایید:\n\n"
+        part7_price = f"*{utility.escape_markdown_v2(price_str)} تومان*"
+        part8_payment_instruction2 = f" را به فروشنده واریز نمایید:\n\n"  # Changed "شماره کارت زیر" to "فروشنده"
 
-        part9_card_intro = f"💳 "
-        # `{utility.escape_markdown_v2(seller_card_number)}` - card number in backticks, content escaped
+        # Seller contact information part
+        seller_contact_info_parts = [utility.escape_markdown_v2("👤 فروشنده: ")]
+        if seller_username:
+            seller_contact_info_parts.append(f"@{utility.escape_markdown_v2(seller_username)}")
+            seller_contact_info_parts.append(utility.escape_markdown_v2(f" (ID: "))
+            seller_contact_info_parts.append(f"`{seller_telegram_id}`")
+            seller_contact_info_parts.append(utility.escape_markdown_v2(")\n"))
+        else:
+            seller_contact_info_parts.append(utility.escape_markdown_v2(f"ID: "))
+            seller_contact_info_parts.append(f"`{seller_telegram_id}`")
+            seller_contact_info_parts.append(utility.escape_markdown_v2("\n"))
+        part_seller_contact_line = "".join(seller_contact_info_parts)
+
+        part9_card_intro = f"💳 شماره کارت: "  # Added "شماره کارت: "
         part10_card_number = f"`{utility.escape_markdown_v2(seller_card_number)}`"
         part11_card_outro = f"\n\n"
-
-        part12_seller_confirmation_notice = f"پس از واریز، فروشنده باید دریافت وجه را تایید کند.\n"  # Note the period
+        part12_seller_confirmation_notice = f"پس از واریز، *ابتدا دکمه «وجه را واریز کردم» را بزنید* تا به فروشنده اطلاع داده شود، سپس منتظر تایید فروشنده برای دریافت کد بمانید.\n"
         part13_warning_intro = f"🚨 "
-        part14_warning_text = f"*هشدار:* ربات مسئولیتی در قبال تراکنش ندارد.\n\n"  # Note the period, bold text
-        part15_cancellation_option = f"در صورت انصراف از خرید، دکمه زیر را بزنید:"
+        # part14_warning_text remains the same
+        part15_cancellation_option = f"در صورت انصراف از خرید (قبل از واریز یا تایید فروشنده)، دکمه لغو را بزنید:"
 
         buyer_message = (
             f"{utility.escape_markdown_v2(part1)}"
             f"{part2_listing_id}"
             f"{utility.escape_markdown_v2(part3_meal_intro)}"
-            f"{part4_meal_desc}"  # Assumed already escaped or use the raw and escape here
+            f"{part4_meal_desc}"
             f"{utility.escape_markdown_v2(part5_meal_outro_and_status)}"
             f"{utility.escape_markdown_v2(part6_payment_instruction1)}"
-            f"{part7_price}"  # price_str is now wrapped in utility.escape_markdown_v2 then bolded
+            f"{part7_price}"
             f"{utility.escape_markdown_v2(part8_payment_instruction2)}"
+            f"{part_seller_contact_line}"  # <-- ADDED SELLER CONTACT LINE
             f"{utility.escape_markdown_v2(part9_card_intro)}"
-            f"{part10_card_number}"  # seller_card_number is escaped and in backticks
+            f"{part10_card_number}"
             f"{utility.escape_markdown_v2(part11_card_outro)}"
             f"{utility.escape_markdown_v2(part12_seller_confirmation_notice)}"
             f"{utility.escape_markdown_v2(part13_warning_intro)}"
-            # For part14_warning_text, since it contains *...*, we need to be careful.
-            # If we want "هشدار:" to be bold, we construct it as *{escaped_text}*
-            # The colon and the period also need escaping.
             f"*{utility.escape_markdown_v2('هشدار:')}* {utility.escape_markdown_v2(' ربات مسئولیتی در قبال تراکنش ندارد.')}\n\n"
             f"{utility.escape_markdown_v2(part15_cancellation_option)}"
         )
 
+        buyer_payment_sent_button = InlineKeyboardButton(
+            "💳 وجه را واریز کردم (اطلاع به فروشنده)",
+            callback_data=f'{CALLBACK_BUYER_PAYMENT_SENT}_{listing_id}'
+        )
         buyer_cancel_button = InlineKeyboardButton(
             "❌ لغو درخواست خرید",
             callback_data=f'{CALLBACK_BUYER_CANCEL_PENDING}_{listing_id}'
         )
-        buyer_markup = InlineKeyboardMarkup([[buyer_cancel_button]])
+        buyer_markup = InlineKeyboardMarkup([
+            [buyer_payment_sent_button],
+            [buyer_cancel_button]
+        ])
 
-        # When sending this message, use ParseMode.MARKDOWN_V2
         logger.debug(f"BUYER MESSAGE (handle_confirm_purchase) constructed: {buyer_message}")
         await query.edit_message_text(
             text=buyer_message,
@@ -541,6 +552,155 @@ async def handle_confirm_purchase(update: Update, context: ContextTypes.DEFAULT_
         except Exception as edit_err:
             logger.error(f"Failed to edit buyer message after purchase confirmation failure: {edit_err}")
 
+
+async def handle_buyer_payment_sent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles when the buyer clicks 'I've Transferred the Money'."""
+    query = update.callback_query
+    user = update.effective_user  # This is the BUYER
+
+    if not query or not user or not query.data:
+        logger.warning("handle_buyer_payment_sent: Missing query, user, or data.")
+        if query: await query.answer("خطای داخلی.", show_alert=True)
+        return
+
+    await query.answer("در حال اطلاع‌رسانی به فروشنده...")
+
+    try:
+        listing_id_str = query.data.split(f"{CALLBACK_BUYER_PAYMENT_SENT}_")[-1]
+        listing_id = int(listing_id_str)
+    except (ValueError, IndexError):
+        logger.error(f"Invalid callback data for buyer_payment_sent: {query.data}")
+        await query.edit_message_text("خطای داخلی: دکمه نامعتبر.")
+        return
+
+    logger.info(
+        f"Buyer {user.id} (TG: {user.username or user.first_name}) claims to have sent payment for listing {listing_id}.")
+
+    seller_tg_id: int | None = None
+    listing_meal_desc: str = "غذا"  # Default
+
+    try:
+        async with get_db_session() as db_session:
+            # Fetch the listing with seller and meal, and also the current user's DB representation
+            stmt = select(models.Listing).where(models.Listing.id == listing_id).options(
+                joinedload(models.Listing.seller),
+                joinedload(models.Listing.meal)
+            )
+            listing_result = await db_session.execute(stmt)
+            listing = listing_result.scalar_one_or_none()
+
+            current_db_user = await crud.get_user_by_telegram_id(db_session, user.id)
+
+            if not listing:
+                logger.warning(f"Listing {listing_id} not found when buyer {user.id} claimed payment sent.")
+                await query.edit_message_text("خطا: آگهی مورد نظر یافت نشد.")
+                return
+
+            if listing.status != models.ListingStatus.AWAITING_CONFIRMATION:
+                logger.warning(
+                    f"Listing {listing_id} is not AWAITING_CONFIRMATION (status: {listing.status}) when buyer claimed payment.")
+                await query.edit_message_text("خطا: این آگهی دیگر در انتظار پرداخت نیست.")
+                return
+
+            if not current_db_user or listing.pending_buyer_id != current_db_user.id:
+                logger.warning(
+                    f"User {user.id} (DB ID: {current_db_user.id if current_db_user else 'N/A'}) is not the pending buyer for listing {listing_id} (Pending Buyer DB ID: {listing.pending_buyer_id}).")
+                await query.edit_message_text("خطا: شما خریدار این آگهی نیستید.", reply_markup=None)
+                return
+
+            if listing.seller:
+                seller_tg_id = listing.seller.telegram_id
+            if listing.meal:
+                listing_meal_desc = listing.meal.description or "غذا"
+
+            # Add a timestamp to the listing if you want to record this event
+            listing.buyer_notified_payment_at = datetime.now(timezone.utc)
+            db_session.add(listing)
+            await db_session.commit()
+            logger.info(f"Recorded buyer {user.id} notified payment for listing {listing_id}")
+
+
+    except Exception as e:
+        logger.error(f"DB Error while handling buyer_payment_sent for listing {listing_id} by buyer {user.id}: {e}",
+                     exc_info=True)
+        await query.edit_message_text(
+            "خطا در پردازش درخواست شما. لطفا به فروشنده اطلاع دهید یا با پشتیبانی تماس بگیرید.")
+        return
+
+    # Notify Seller
+    if seller_tg_id:
+        try:
+            buyer_display_name_escaped = utility.escape_markdown_v2(
+                user.username or user.first_name or f"ID: {user.id}")
+            listing_meal_desc_escaped = utility.escape_markdown_v2(listing_meal_desc)
+            listing_id_md = f"`{listing_id}`"
+
+            seller_message = (
+                f"📢 خریدار ({buyer_display_name_escaped}) اعلام کرد که وجه را برای آگهی {listing_id_md} "
+                f"({listing_meal_desc_escaped}) واریز کرده است\\.\n\n"
+                f"لطفا موجودی حساب خود را بررسی کرده و در صورت دریافت وجه، از طریق دکمه‌های قبلی در ربات، فروش را تایید کنید\\."
+            )
+
+            await context.bot.send_message(
+                chat_id=seller_tg_id,
+                text=seller_message,
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            logger.info(
+                f"Notified seller {seller_tg_id} that buyer {user.id} claims to have paid for listing {listing_id}.")
+
+            # Update buyer's message to confirm action and remove the "I've paid" button
+            buyer_updated_message_text_parts = [
+                utility.escape_markdown_v2(f"✅ به فروشنده اطلاع داده شد که شما وجه را برای آگهی "),
+                listing_id_md,
+                utility.escape_markdown_v2(f" ({listing_meal_desc_escaped}) واریز کرده‌اید.\n\n"),
+                utility.escape_markdown_v2("لطفا منتظر تایید فروشنده بمانید.\n"),
+                utility.escape_markdown_v2(
+                    "در صورت عدم تایید توسط فروشنده پس از مدت معقول، می‌توانید با ایشان یا پشتیبانی تماس بگیرید.\n\n"),
+                utility.escape_markdown_v2(
+                    "همچنان می‌توانید درخواست خرید خود را از طریق دکمه زیر لغو کنید (قبل از تایید نهایی فروشنده):")
+            ]
+            buyer_updated_message = "".join(buyer_updated_message_text_parts)
+
+            buyer_cancel_button_only = InlineKeyboardButton(
+                "❌ لغو درخواست خرید",
+                callback_data=f'{CALLBACK_BUYER_CANCEL_PENDING}_{listing_id}'
+            )
+            updated_buyer_markup = InlineKeyboardMarkup([[buyer_cancel_button_only]])
+
+            await query.edit_message_text(
+                text=buyer_updated_message,
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=updated_buyer_markup
+            )
+
+        except (Forbidden, BadRequest) as e_tg:
+            logger.warning(f"Telegram error notifying seller {seller_tg_id} for listing {listing_id} payment: {e_tg}")
+            # Attempt to inform buyer about the notification failure, but keep their message updated
+            # regarding their action.
+            current_text = query.message.text if query.message else ""  # Get current text
+            # Modify the text slightly to indicate problem, but keep the core confirmation
+            problem_notifying_seller_text = utility.escape_markdown_v2(
+                "پیام شما ثبت شد، اما مشکلی در اطلاع‌رسانی مستقیم به فروشنده پیش آمد. "
+                "لطفا خودتان نیز به ایشان اطلاع دهید یا منتظر بمانید.\n\n") + buyer_updated_message
+
+            await query.edit_message_text(
+                text=problem_notifying_seller_text,
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=updated_buyer_markup  # Keep cancel button
+            )
+        except Exception as e_notify:
+            logger.error(
+                f"Unexpected error notifying seller or updating buyer message for listing {listing_id}: {e_notify}",
+                exc_info=True)
+            await query.edit_message_text(
+                utility.escape_markdown_v2("خطای ناشناخته. لطفا وضعیت را با فروشنده بررسی کنید."),
+                parse_mode=ParseMode.MARKDOWN_V2
+            )  # Potentially keep updated_buyer_markup if appropriate
+    else:
+        logger.error(
+            f"Seller Telegram ID not found for listing {listing_id} when buyer {user.id} claimed payment sent.")
+        await query.edit_message_text("خطا: اطلاعات فروشنده یافت نشد. لطفا با پشتیبانی تماس بگیرید.")
 
 async def handle_cancel_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the 'Cancel' button press during purchase confirmation."""
