@@ -240,7 +240,7 @@ async def update_meals_from_samad(app: PTBApplication = None): # Added app param
 
     logger.info("Attempting to authenticate with Samad API.")
     try:
-        logger.debug(f"Using proxy: {proxy_config}")
+        logger.debug(f"Using proxy: {SAMAD_PROXY}")
         async with httpx.AsyncClient(verify=False, timeout=20.0, proxy=SAMAD_PROXY) as client:
             auth_response = await client.post(TOKEN_URL, headers=auth_headers, data=auth_form_fields)
             auth_response.raise_for_status()
