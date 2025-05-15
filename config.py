@@ -1,3 +1,4 @@
+import logging
 import os
 from dotenv import load_dotenv
 
@@ -6,11 +7,22 @@ from utility import escape_markdown_v2
 # Load environment variables from .env file if it exists
 load_dotenv()
 
+# --- logger setup ---
+_config_logger = logging.getLogger(__name__ + ".config_loader") # Unique logger name
+if not logging.getLogger().hasHandlers(): # Setup basicConfig only if no handlers are configured yet
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO").upper())
+
 # --- Bot/Database Credentials ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 DATABASE_URL = os.environ.get("DATABASE_URL", "./self_market.db").strip()
 BOT_PERSISTENCE_FILEPATH = os.environ.get("BOT_PERSISTENCE_FILEPATH", "./bot_persistence").strip()
 SAMAD_PROXY = os.environ.get("SAMAD_PROXY", "socks5://dornSyHxu6:LMSmlI5vMo@laser.kafsabtaheri.com:13865")
+
+# --- Bot Operation Mode ---
+BOT_MODE = os.environ.get("BOT_MODE", "dev").strip().lower()
+if BOT_MODE not in ["dev", "production"]:
+    _config_logger.warning(f"Invalid BOT_MODE '{BOT_MODE}' in .env. Defaulting to 'dev'.")
+    BOT_MODE = "dev"
 
 # --- SAMAD API Credentials ---
 SAMAD_API_USERNAME = os.environ.get("SAMAD_API_USERNAME", "YOUR_SAMAD_USERNAME")

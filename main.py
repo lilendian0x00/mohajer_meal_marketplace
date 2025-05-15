@@ -126,71 +126,91 @@ async def post_shutdown_tasks(app: Application | None = None): # app argument pr
     logger.info("Post-shutdown tasks complete.")
 
 
-def main_sync():
-    """Synchronous entry point that sets up and runs the asyncio application for webhook."""
-
-    # Token Check
+def run_webhook_mode():
+    """Configures and runs the bot in webhook mode."""
     if not config.TELEGRAM_BOT_TOKEN or config.TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        logger.error("FATAL: Telegram Bot Token missing in config. Bot will not start.")
+        logger.error("FATAL: Telegram Bot Token missing in config. Bot will not start in webhook mode.")
         return
-
-    # Webhook Specific Checks (from new version)
     if not config.WEBHOOK_BASE_URL:
         logger.error("FATAL: WEBHOOK_BASE_URL is not set in config. Cannot start in webhook mode.")
         return
 
-    # The full webhook URL for Telegram will be set via set_webhook.
-    webhook_url_path = f"/{config.TELEGRAM_BOT_TOKEN.strip('/')}" # Ensure leading slash, no trailing
+    webhook_url_path = f"/{config.TELEGRAM_BOT_TOKEN.strip('/')}"
     full_webhook_url_for_telegram = f"{config.WEBHOOK_BASE_URL.rstrip('/')}{webhook_url_path}"
 
-    logger.info("Creating TelegramBot instance...")
+    logger.info("Creating TelegramBot instance for webhook mode...")
     try:
         bot_instance = TelegramBot(token=config.TELEGRAM_BOT_TOKEN)
         ptb_app = bot_instance.application
-    except ValueError as e: # Catch potential token error from Bot __init__
-         logger.error(f"Failed to create bot instance (ValueError): {e}", exc_info=True)
-         return
-    except Exception as e: # Catch any other error during bot instantiation
-        logger.error(f"Failed to create bot instance (Exception): {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Failed to create bot instance for webhook: {e}", exc_info=True)
         return
 
-
-    # --- Configure PTB Application with startup/shutdown tasks ---
     ptb_app.post_init = perform_startup_tasks
     ptb_app.post_shutdown = post_shutdown_tasks
 
     logger.info("Starting PTB Application with webhook server...")
-    logger.info(f"Webhook: Telegram will be told to send updates to: {full_webhook_url_for_telegram}")
-    logger.info(f"Webhook: PTB will listen on IP: {config.WEBHOOK_LISTEN_IP}, Port: {config.WEBHOOK_LISTEN_PORT}, Path: {webhook_url_path}")
+    logger.info(f"Webhook URL for Telegram: {full_webhook_url_for_telegram}")
+    logger.info(f"PTB listening on IP: {config.WEBHOOK_LISTEN_IP}, Port: {config.WEBHOOK_LISTEN_PORT}, Path: {webhook_url_path}")
 
+    # SSL certificate and key are passed if configured
+    ssl_context = None
+    if config.WEBHOOK_SSL_CERT and config.WEBHOOK_SSL_KEY:
+        ssl_context = (config.WEBHOOK_SSL_CERT, config.WEBHOOK_SSL_KEY)
+        logger.info(f"Using SSL certificate: {config.WEBHOOK_SSL_CERT} and key: {config.WEBHOOK_SSL_KEY}")
+    elif config.WEBHOOK_SSL_CERT or config.WEBHOOK_SSL_KEY:
+        logger.warning("WEBHOOK_SSL_CERT or WEBHOOK_SSL_KEY is set, but not both. SSL will not be used.")
+
+
+    ptb_app.run_webhook(
+        listen=config.WEBHOOK_LISTEN_IP,
+        port=config.WEBHOOK_LISTEN_PORT,
+        secret_token=config.WEBHOOK_SECRET_TOKEN or None,
+        webhook_url=full_webhook_url_for_telegram, # URL Telegram will send updates to
+        url_path=webhook_url_path, # Path PTB will listen on
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True, # Recommended to drop when starting webhook
+        key=config.WEBHOOK_SSL_KEY if ssl_context else None,
+        cert=config.WEBHOOK_SSL_CERT if ssl_context else None,
+    )
+    logger.info("PTB Webhook mode has finished.")
+
+
+def run_polling_mode():
+    """Configures and runs the bot in polling mode."""
+    if not config.TELEGRAM_BOT_TOKEN or config.TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        logger.error("FATAL: Telegram Bot Token missing in config. Bot will not start in polling mode.")
+        return
+
+    logger.info("Creating TelegramBot instance for polling mode...")
     try:
-        ptb_app.run_webhook(
-            listen=config.WEBHOOK_LISTEN_IP,
-            port=config.WEBHOOK_LISTEN_PORT,
-            secret_token=config.WEBHOOK_SECRET_TOKEN or None,
-            webhook_url=full_webhook_url_for_telegram,
-            url_path=webhook_url_path,
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=False,
-        )
-    except RuntimeError as e: # Catch potential handler registration or other PTB setup error
-        logger.error(f"Failed during PTB run_webhook setup: {e}", exc_info=True)
+        bot_instance = TelegramBot(token=config.TELEGRAM_BOT_TOKEN)
+        ptb_app = bot_instance.application
     except Exception as e:
-        logger.error(f"An unexpected error occurred running the PTB webhook: {e}", exc_info=True)
+        logger.error(f"Failed to create bot instance for polling: {e}", exc_info=True)
+        return
 
-    logger.info("PTB Application run_webhook has finished.")
+    ptb_app.post_init = perform_startup_tasks
+    ptb_app.post_shutdown = post_shutdown_tasks
+
+    logger.info("Starting PTB Application in polling mode...")
+    # run_polling will internally call bot.delete_webhook() if drop_pending_updates=True
+    ptb_app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True # Recommended to drop when starting polling
+    )
+    logger.info("PTB Polling mode has finished.")
 
 
 # Entry Point
 if __name__ == "__main__":
-    # Basic logging setup can happen before asyncio.run or PTB's own loop starts
     try:
         logging.basicConfig(
             format=config.LOG_FORMAT, level=config.LOG_LEVEL, force=True
         )
-        logging.getLogger("httpx").setLevel(logging.WARNING) # From old
-        logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING) # From old
-        # Define logger here if not already defined at module level, but it is.
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger('apscheduler').setLevel(logging.WARNING) # Quiet down APScheduler INFO logs
+        logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
         logger.info("Logging setup complete.")
     except Exception as e:
         # Fallback basic logging if setup fails
@@ -198,16 +218,22 @@ if __name__ == "__main__":
         logger = logging.getLogger(__name__) # Re-ensure logger is defined
         logger.error(f"Logging setup failed: {e}", exc_info=True)
 
-    logger.info("Starting application...")
+    logger.info(f"Starting application in {config.BOT_MODE.upper()} mode...")
+
     try:
-        # PTB's run_webhook/run_polling creates and manages the asyncio loop.
-        # We don't need asyncio.run() around main_sync() for this PTB setup.
-        main_sync()
+        if config.BOT_MODE == "dev":
+            run_webhook_mode()
+        elif config.BOT_MODE == "production":
+            run_polling_mode()
+        else:
+            # This case should be caught by config.py, but as a safeguard:
+            logger.error(f"Invalid BOT_MODE '{config.BOT_MODE}' at runtime. Set to 'polling' or 'webhook'. Defaulting to polling.")
+            run_polling_mode()
+
     except (KeyboardInterrupt, SystemExit) as e:
         logger.info(f"Application received {type(e).__name__}. Exiting gracefully.")
     except Exception as e: # Catch any other unexpected errors at the top level
         logger.error(f"Unhandled exception at top application level: {e}", exc_info=True)
     finally:
-        # This will be reached after main_sync() completes (i.e., PTB stops)
-        # or if an exception causes an exit from the try block.
+        # PTB's run_webhook/run_polling will manage and clean up its own asyncio loop.
         logger.info("Application finished.")
