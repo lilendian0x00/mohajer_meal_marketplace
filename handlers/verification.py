@@ -5,6 +5,7 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardR
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
+import config
 from config import WELCOME_MESSAGE
 from .common import (
     # ASK_EDU_NUM, ASK_ID_NUM,
@@ -178,21 +179,24 @@ async def receive_phone_number(update: Update, context: ContextTypes.DEFAULT_TYP
 
     phone_num_raw = contact.phone_number
     phone_num_normalized = phone_num_raw.replace("+", "").replace(" ", "")
-    if not phone_num_normalized.startswith("98"): # Assuming Iranian numbers
-        logger.warning(f"User {user.id} shared non-Iranian phone number: {phone_num_raw}")
-        await message.reply_text(
-            "خطا: به نظر می‌رسد شماره تلفن ارسال شده متعلق به ایران نیست. لطفا شماره تلفن معتبر ایرانی خود را ارسال کنید یا /cancel بزنید."
-        )
-        phone_button = KeyboardButton("ارسال شماره تلفن من", request_contact=True)
-        cancel_button = KeyboardButton("/cancel")
-        reply_markup = ReplyKeyboardMarkup([[phone_button], [cancel_button]], resize_keyboard=True,
-                                           one_time_keyboard=True)
-        await message.reply_text(
-            "لطفا شماره تلفن *ایرانی* خودتان را با استفاده از دکمه زیر به اشتراک بگذارید.", # Keep self prompt
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN_V2 # Ensure parse mode for *
-        )
-        return ASK_PHONE
+
+    # Don't verify phone number's country on DEV Mode
+    if config.BOT_MODE == "production":
+        if not phone_num_normalized.startswith("98"): # Assuming Iranian numbers
+            logger.warning(f"User {user.id} shared non-Iranian phone number: {phone_num_raw}")
+            await message.reply_text(
+                "خطا: به نظر می‌رسد شماره تلفن ارسال شده متعلق به ایران نیست. لطفا شماره تلفن معتبر ایرانی خود را ارسال کنید یا /cancel بزنید."
+            )
+            phone_button = KeyboardButton("ارسال شماره تلفن من", request_contact=True)
+            cancel_button = KeyboardButton("/cancel")
+            reply_markup = ReplyKeyboardMarkup([[phone_button], [cancel_button]], resize_keyboard=True,
+                                               one_time_keyboard=True)
+            await message.reply_text(
+                "لطفا شماره تلفن *ایرانی* خودتان را با استفاده از دکمه زیر به اشتراک بگذارید.", # Keep self prompt
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN_V2 # Ensure parse mode for *
+            )
+            return ASK_PHONE
 
     phone_num_to_save = phone_num_normalized
     logger.info(f"User {user.id} shared valid Iranian phone number: ...{phone_num_to_save[-4:]}")
