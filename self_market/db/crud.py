@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone, date, timedelta
 from decimal import Decimal
 from typing import Any, Coroutine
-from sqlalchemy import func
+from sqlalchemy import func, and_
 from sqlalchemy import or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -448,10 +448,26 @@ async def get_meals_for_selling(db: AsyncSession, specific_date: date | None = N
     return result.scalars().all()
 
 async def check_listing_exists_by_code(db: AsyncSession, code: str) -> bool:
-    """Checks if a listing with the given university_reservation_code already exists."""
-    stmt = select(models.Listing.id).where(models.Listing.university_reservation_code == code).limit(1)
+    """
+    Checks if a listing with the given university_reservation_code already exists
+    AND IS NOT CANCELLED OR EXPIRED.
+    Returns True if an active (non-cancelled) listing with this code exists, False otherwise.
+    """
+    logger.debug(f"Checking for existing, non-cancelled listing with code: {code}")
+    stmt = select(models.Listing.id).where(
+        and_(
+            models.Listing.university_reservation_code == code,
+            models.Listing.status != models.ListingStatus.CANCELLED,
+            models.Listing.status != models.ListingStatus.EXPIRED
+        )
+    ).limit(1)
     result = await db.execute(stmt)
-    return result.scalar_one_or_none() is not None
+    exists = result.scalar_one_or_none() is not None
+    if exists:
+        logger.info(f"An active (non-cancelled) listing with code '{code}' already exists.")
+    else:
+        logger.info(f"No active (non-cancelled) listing found with code '{code}'. Safe to create a new one.")
+    return exists
 
 async def create_listing(
     db: AsyncSession,
@@ -464,7 +480,10 @@ async def create_listing(
     # Check uniqueness of the code first
     code_exists = await check_listing_exists_by_code(db, university_reservation_code)
     if code_exists:
-        logger.warning(f"Attempted to create duplicate listing for code {university_reservation_code}")
+        logger.warning(
+            f"Attempted to create listing for code {university_reservation_code}, "
+            "but an active (non-cancelled) listing with this code already exists."
+        )
         return None # Indicate failure: duplicate code
 
     logger.info(f"Creating new listing for code {university_reservation_code} by seller {seller_db_id} for meal {meal_id} at price {price}")
