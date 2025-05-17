@@ -153,7 +153,7 @@ class Listing(Base):
     price = Column(Numeric(10, 2), nullable=False) # Price for the listing
     status = Column(SQLEnum(ListingStatus, name="listing_status_enum"), default=ListingStatus.AVAILABLE, nullable=False, index=True)
 
-    university_reservation_code = Column(String(64), unique=True, nullable=False,index=True)  # Make unique to prevent double listing
+    university_reservation_code = Column(String(64), nullable=False,index=True)  # Make unique to prevent double listing
     meal_id = Column(Integer, ForeignKey('meals.id'), nullable=False, index=True)  # Link back to the meal definition
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
