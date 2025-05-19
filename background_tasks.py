@@ -14,15 +14,13 @@ from telegram.constants import ParseMode
 from telegram.error import Forbidden, BadRequest # To handle blocked users or bad IDs
 from telegram.ext import Application as PTBApplication # Specific type hint for Application
 
-from config import MEALS_LIMIT, SAMAD_PROXY, DEFAULT_PRICE_LIMIT, SAMAD_API_USERNAME, SAMAD_API_PASSWORD
+from config import MEALS_LIMIT, SAMAD_PROXY, DEFAULT_PRICE_LIMIT, SAMAD_API_USERNAME, SAMAD_API_PASSWORD, \
+    MEAL_SERVICE_CUTOFF_TIME_IRAN
 from self_market import models # Or wherever your models are
 from self_market.db.session import get_db_session # Your session factory
 from utility import get_iran_week_start_dates, IRAN_TZ
 
 logger = logging.getLogger(__name__)
-
-# Define the cutoff time
-MEAL_SERVICE_CUTOFF_TIME_IRAN = time(16, 0, 0) # 4:00 PM Iran Time
 
 async def check_pending_listings_timeout(app: PTBApplication):
     """

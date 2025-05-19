@@ -1,5 +1,7 @@
 import logging
 import os
+from datetime import time, datetime
+
 from dotenv import load_dotenv
 
 from utility import escape_markdown_v2
@@ -63,6 +65,31 @@ BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES : int = int(os.environ.get("MEALS
 DEFAULT_PRICE_LIMIT: int = int(os.environ.get("DEFAULT_PRICE_LIMIT", "25000"))
 # Interval for cleaning up listings of past meals (e.g., every hour)
 BACKGROUND_PAST_MEAL_LISTING_CLEANUP_INTERVAL_MINUTES: int = int(os.environ.get("PAST_MEAL_LISTING_CLEANUP_INTERVAL_MINUTES", "60"))
+
+
+# Meal Service Cutoff Time (Iran Local Time)
+MEAL_SERVICE_CUTOFF_TIME_IRAN_STR = os.environ.get("MEAL_SERVICE_CUTOFF_TIME_IRAN_STR", "16:00:00")
+MEAL_SERVICE_CUTOFF_TIME_IRAN: time | None = None
+try:
+    # Attempt to parse the time string (HH:MM:SS or HH:MM)
+    parsed_time = datetime.strptime(MEAL_SERVICE_CUTOFF_TIME_IRAN_STR, '%H:%M:%S').time()
+    MEAL_SERVICE_CUTOFF_TIME_IRAN = parsed_time
+except ValueError:
+    try:
+        # Fallback to parsing HH:MM
+        parsed_time = datetime.strptime(MEAL_SERVICE_CUTOFF_TIME_IRAN_STR, '%H:%M').time()
+        MEAL_SERVICE_CUTOFF_TIME_IRAN = parsed_time
+        _config_logger.info(f"MEAL_SERVICE_CUTOFF_TIME_IRAN_STR parsed as HH:MM. Using {MEAL_SERVICE_CUTOFF_TIME_IRAN}.")
+    except ValueError:
+        _config_logger.error(
+            f"Invalid format for MEAL_SERVICE_CUTOFF_TIME_IRAN_STR: '{MEAL_SERVICE_CUTOFF_TIME_IRAN_STR}'. "
+            f"Expected HH:MM:SS or HH:MM. Using default 16:00:00."
+        )
+        MEAL_SERVICE_CUTOFF_TIME_IRAN = time(16, 0, 0) # Default if parsing fails
+
+if MEAL_SERVICE_CUTOFF_TIME_IRAN:
+     _config_logger.info(f"Meal service cutoff time (Iran): {MEAL_SERVICE_CUTOFF_TIME_IRAN.strftime('%H:%M:%S')}")
+
 
 # TODO: Add other configurable items here later (e.g., price limits, messages)
 
