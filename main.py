@@ -6,7 +6,7 @@ from telegram import Update
 from telegram.ext import Application
 import config
 from self_market.db import crud
-from background_tasks import check_pending_listings_timeout, update_meals_from_samad
+from background_tasks import check_pending_listings_timeout, update_meals_from_samad, cleanup_past_meal_listings
 from config import BACKGROUND_LISTING_TIMEOUT_CHECK_INTERVAL_MINUTES, PENDING_TIMEOUT_MINUTES, BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES
 from bot import TelegramBot
 from self_market.db.session import init_db, get_db_session
@@ -108,6 +108,19 @@ async def perform_startup_tasks(ptb_app: Application):
     )
     logger.info( # Added logging for the second job for consistency
         f"Scheduled background task 'update_meals_from_samad' to run every {BACKGROUND_MEALS_UPDATE_CHECK_INTERVAL_MINUTES} minutes.")
+
+    # Add new cleanup job for past meal listings
+    scheduler_ref.add_job(
+        cleanup_past_meal_listings,
+        trigger='interval',
+        next_run_time=datetime.now(timezone.utc),  # Run at startup then interval
+        minutes=BACKGROUND_PAST_MEAL_LISTING_CLEANUP_INTERVAL_MINUTES,
+        id='cleanup_past_meal_listings_job',
+        replace_existing=True,
+        kwargs={'app': ptb_app}
+    )
+    logger.info(
+        f"Scheduled background task 'cleanup_past_meal_listings' to run every {BACKGROUND_PAST_MEAL_LISTING_CLEANUP_INTERVAL_MINUTES} minutes.")
 
     scheduler_ref.start()
     logger.info("APScheduler started.")

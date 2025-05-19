@@ -1,12 +1,12 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone, date, timedelta
+from datetime import datetime, timezone, date, timedelta, time
 
 import certifi
 import httpx
 from httpx import request
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -17,9 +17,12 @@ from telegram.ext import Application as PTBApplication # Specific type hint for 
 from config import MEALS_LIMIT, SAMAD_PROXY, DEFAULT_PRICE_LIMIT, SAMAD_API_USERNAME, SAMAD_API_PASSWORD
 from self_market import models # Or wherever your models are
 from self_market.db.session import get_db_session # Your session factory
-from utility import get_iran_week_start_dates
+from utility import get_iran_week_start_dates, IRAN_TZ
 
 logger = logging.getLogger(__name__)
+
+# Define the cutoff time
+MEAL_SERVICE_CUTOFF_TIME_IRAN = time(16, 0, 0) # 4:00 PM Iran Time
 
 async def check_pending_listings_timeout(app: PTBApplication):
     """
@@ -203,6 +206,132 @@ def process_meal_data(raw_data, current_week_start_date, is_current_week):
     else:
         logger.info(f"Finished processing for next week. {len(processed_meals)} meals kept.")
         return processed_meals
+
+
+async def cleanup_past_meal_listings(app: PTBApplication = None):
+    """
+        Cleans up listings for meals whose service time (Iran local time) has passed.
+        """
+    logger.info("Running background task: cleanup_past_meal_listings")
+    now_utc = datetime.now(timezone.utc)  # Current time in UTC
+
+    async with get_db_session() as session:
+        try:
+            # Find meals that are considered "overdue"
+            # A meal is overdue if its specific cutoff datetime (in Iran TZ, converted to UTC) has passed.
+
+            # We query a slightly wider range to catch all meals whose Iran cutoff might have just passed.
+            # For example, if it's 1 AM UTC on the 16th, 4 PM on the 15th in Iran has passed.
+            date_range_start_utc = now_utc.date() - timedelta(days=1)
+
+            potentially_overdue_meal_candidates_stmt = select(models.Meal).where(
+                models.Meal.date >= date_range_start_utc,
+                models.Meal.date <= now_utc.date()  # Only meals on or before current UTC date
+            )
+            result_meal_candidates = await session.execute(potentially_overdue_meal_candidates_stmt)
+            meal_candidates = result_meal_candidates.scalars().all()
+
+            overdue_meal_ids = []
+            for meal in meal_candidates:
+                # meal.date is the date of the meal in Iran (naive)
+                # Combine meal.date (Iran) with MEAL_SERVICE_CUTOFF_TIME_IRAN (Iran)
+                meal_cutoff_naive_iran = datetime.combine(meal.date, MEAL_SERVICE_CUTOFF_TIME_IRAN)
+
+                # Localize this naive datetime to Iran timezone
+                meal_cutoff_iran_aware = IRAN_TZ.localize(meal_cutoff_naive_iran)
+
+                # Convert Iran cutoff time to UTC
+                meal_cutoff_utc = meal_cutoff_iran_aware.astimezone(timezone.utc)
+
+                # Check if this UTC cutoff time has passed relative to current UTC time
+                if meal_cutoff_utc < now_utc:
+                    overdue_meal_ids.append(meal.id)
+                    logger.debug(f"Meal ID {meal.id} (Date: {meal.date}, Desc: {meal.description}) is overdue. "
+                                 f"Iran Cutoff: {meal_cutoff_iran_aware}, UTC Cutoff: {meal_cutoff_utc}, Now UTC: {now_utc}")
+
+            if not overdue_meal_ids:
+                logger.info("No overdue meals found requiring listing cleanup.")
+                return  # Exit early if no meals are overdue
+
+            logger.info(f"Found {len(overdue_meal_ids)} overdue meal IDs: {overdue_meal_ids}")
+
+            # Handle AWAITING_CONFIRMATION listings for these overdue meals
+            stmt_pending_overdue = select(models.Listing).where(
+                models.Listing.status == models.ListingStatus.AWAITING_CONFIRMATION,
+                models.Listing.meal_id.in_(overdue_meal_ids)
+            ).options(
+                selectinload(models.Listing.seller),
+                selectinload(models.Listing.pending_buyer_relation),
+                selectinload(models.Listing.meal)
+            )
+            result_pending_overdue = await session.execute(stmt_pending_overdue)
+            pending_overdue_listings = result_pending_overdue.scalars().all()
+
+            if pending_overdue_listings:
+                logger.info(f"Found {len(pending_overdue_listings)} AWAITING_CONFIRMATION listings for overdue meals.")
+                for listing in pending_overdue_listings:
+                    meal_desc = listing.meal.description if listing.meal else "Unknown Meal"
+                    seller_tg_id = listing.seller.telegram_id if listing.seller else None
+                    buyer_tg_id = listing.pending_buyer_relation.telegram_id if listing.pending_buyer_relation else None
+
+                    if seller_tg_id:
+                        seller_msg = (
+                            f"⚠️ آگهی شما `{listing.id}` ({meal_desc}) به دلیل پایان زمان سرویس غذا و عدم تایید، "
+                            f"به طور خودکار لغو و منقضی شد."
+                        )
+                        try:
+                            await app.bot.send_message(seller_tg_id, seller_msg, parse_mode=ParseMode.MARKDOWN)
+                        except (Forbidden, BadRequest) as e:
+                            logger.warning(
+                                f"Failed to notify seller {seller_tg_id} for auto-cancellation of listing {listing.id}: {e}")
+
+                    if buyer_tg_id:
+                        buyer_msg = (
+                            f"⚠️ درخواست خرید شما برای آگهی `{listing.id}` ({meal_desc}) به دلیل پایان زمان سرویس غذا "
+                            f"و عدم تایید توسط فروشنده، به طور خودکار لغو شد. آگهی منقضی شده است."
+                        )
+                        try:
+                            await app.bot.send_message(buyer_tg_id, buyer_msg, parse_mode=ParseMode.MARKDOWN)
+                        except (Forbidden, BadRequest) as e:
+                            logger.warning(
+                                f"Failed to notify buyer {buyer_tg_id} for auto-cancellation of listing {listing.id}: {e}")
+
+                    listing.status = models.ListingStatus.EXPIRED
+                    listing.pending_buyer_id = None
+                    listing.pending_until = None
+                    listing.cancelled_at = now_utc
+                    session.add(listing)
+
+                await session.commit()
+                logger.info(
+                    f"Processed {len(pending_overdue_listings)} AWAITING_CONFIRMATION listings for overdue meals.")
+
+            # Handle AVAILABLE listings for these overdue meals
+            stmt_available_overdue_update = (
+                update(models.Listing)
+                .where(
+                    models.Listing.status == models.ListingStatus.AVAILABLE,
+                    models.Listing.meal_id.in_(overdue_meal_ids)
+                )
+                .values(status=models.ListingStatus.EXPIRED)
+            )
+            result_available_update = await session.execute(stmt_available_overdue_update)
+            updated_available_count = result_available_update.rowcount
+
+            if updated_available_count > 0:
+                logger.info(f"Marked {updated_available_count} AVAILABLE listings for overdue meals as EXPIRED.")
+                await session.commit()
+
+        except SQLAlchemyError as e_sql:  # Catch specific SQLAlchemy errors
+            logger.error(f"SQLAlchemyError in cleanup_past_meal_listings: {e_sql}", exc_info=True)
+            await session.rollback()
+        except Exception as e:
+            logger.error(f"Unexpected error in cleanup_past_meal_listings: {e}", exc_info=True)
+            await session.rollback()  # Rollback on any other error during DB ops
+
+    logger.info("Finished background task: cleanup_past_meal_listings")
+
+
 
 async def update_meals_from_samad(app: PTBApplication = None): # Added app parameter for consistency if needed by scheduler
     """

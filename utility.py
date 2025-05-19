@@ -1,5 +1,7 @@
 import io
 import os
+from zoneinfo import ZoneInfo
+
 import qrcode
 from PIL import Image, ImageDraw, ImageFont
 import re
@@ -9,6 +11,7 @@ import jdatetime
 import logging
 
 logger = logging.getLogger(__name__)
+IRAN_TZ = ZoneInfo("Asia/Tehran")
 
 def is_valid_iranian_national_id(national_id: str) -> bool:
     """
