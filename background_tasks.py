@@ -224,50 +224,82 @@ async def cleanup_past_meal_listings(app: PTBApplication = None):
 
             potentially_overdue_meal_candidates_stmt = select(models.Meal).where(
                 models.Meal.date >= date_range_start_utc,
-                models.Meal.date <= now_utc.date()  # Only meals on or before current UTC date
+                models.Meal.date <= now_utc.date(),  # Only meals on or before current UTC date
+                models.Meal.is_active == True # Only consider the meals that are active
             )
             result_meal_candidates = await session.execute(potentially_overdue_meal_candidates_stmt)
             meal_candidates = result_meal_candidates.scalars().all()
 
-            overdue_meal_ids = []
+            overdue_meal_ids_to_deactivate = []
             for meal in meal_candidates:
                 # meal.date is the date of the meal in Iran (naive)
                 # Combine meal.date (Iran) with MEAL_SERVICE_CUTOFF_TIME_IRAN (Iran)
                 meal_cutoff_naive_iran = datetime.combine(meal.date, MEAL_SERVICE_CUTOFF_TIME_IRAN)
 
                 # Localize this naive datetime to Iran timezone
-                meal_cutoff_iran_aware = IRAN_TZ.localize(meal_cutoff_naive_iran)
+                meal_cutoff_iran_aware = meal_cutoff_naive_iran.replace(tzinfo=IRAN_TZ)
 
                 # Convert Iran cutoff time to UTC
                 meal_cutoff_utc = meal_cutoff_iran_aware.astimezone(timezone.utc)
 
                 # Check if this UTC cutoff time has passed relative to current UTC time
                 if meal_cutoff_utc < now_utc:
-                    overdue_meal_ids.append(meal.id)
+                    overdue_meal_ids_to_deactivate.append(meal.id)
                     logger.debug(f"Meal ID {meal.id} (Date: {meal.date}, Desc: {meal.description}) is overdue. "
                                  f"Iran Cutoff: {meal_cutoff_iran_aware}, UTC Cutoff: {meal_cutoff_utc}, Now UTC: {now_utc}")
 
-            if not overdue_meal_ids:
-                logger.info("No overdue meals found requiring listing cleanup.")
-                return  # Exit early if no meals are overdue
+            if not overdue_meal_ids_to_deactivate:
+                logger.info("No active meals found requiring deactivation or listing cleanup based on time.")
+                # Still proceed to check listings, as some might be linked to already inactive meals
+                # if this task didn't run for a while.
+                # However, a separate query for listings linked to already inactive meals might be needed
+                # if we *only* want this task to handle the transition.
+                # For now, let's assume we get all overdue_meal_ids regardless of current is_active state
+                # and the listing cleanup uses that comprehensive list.
+                # The deactivation of meals is a separate step.
+                pass  # Continue to listing cleanup part
 
-            logger.info(f"Found {len(overdue_meal_ids)} overdue meal IDs: {overdue_meal_ids}")
+                # Deactivate Overdue Meals
+                if overdue_meal_ids_to_deactivate:
+                    logger.info(
+                        f"Found {len(overdue_meal_ids_to_deactivate)} meal IDs to deactivate: {overdue_meal_ids_to_deactivate}")
+                    stmt_deactivate_meals = (
+                        update(models.Meal)
+                        .where(models.Meal.id.in_(overdue_meal_ids_to_deactivate))
+                        .values(is_active=False)
+                    )
+                    deactivate_result = await session.execute(stmt_deactivate_meals)
+                    deactivated_meal_count = deactivate_result.rowcount
+                    if deactivated_meal_count > 0:
+                        logger.info(f"Deactivated {deactivated_meal_count} meals.")
+                        await session.commit()  # Commit meal deactivation
 
-            # Handle AWAITING_CONFIRMATION listings for these overdue meals
-            stmt_pending_overdue = select(models.Listing).where(
+            # Now, get ALL meal IDs that are currently inactive, for cleaning up their listings
+            # This includes newly deactivated ones and any that were already inactive
+            all_inactive_meal_ids_stmt = select(models.Meal.id).where(models.Meal.is_active == False)
+            result_inactive_ids = await session.execute(all_inactive_meal_ids_stmt)
+            all_inactive_meal_ids = result_inactive_ids.scalars().all()
+
+            if not all_inactive_meal_ids:
+                logger.info("No inactive meals found, so no listings to cleanup for them.")
+                return  # Exit if no inactive meals to process listings for
+
+            # Handle AWAITING_CONFIRMATION listings for these INACTIVE meals
+            stmt_pending_inactive = select(models.Listing).where(
                 models.Listing.status == models.ListingStatus.AWAITING_CONFIRMATION,
-                models.Listing.meal_id.in_(overdue_meal_ids)
+                models.Listing.meal_id.in_(all_inactive_meal_ids)  # Use all inactive meal IDs
             ).options(
                 selectinload(models.Listing.seller),
                 selectinload(models.Listing.pending_buyer_relation),
                 selectinload(models.Listing.meal)
             )
-            result_pending_overdue = await session.execute(stmt_pending_overdue)
-            pending_overdue_listings = result_pending_overdue.scalars().all()
 
-            if pending_overdue_listings:
-                logger.info(f"Found {len(pending_overdue_listings)} AWAITING_CONFIRMATION listings for overdue meals.")
-                for listing in pending_overdue_listings:
+            result_pending_overdue = await session.execute(stmt_pending_inactive)
+            pending_inactive_listings = result_pending_overdue.scalars().all()
+
+            if pending_inactive_listings:
+                logger.info(f"Found {len(pending_inactive_listings)} AWAITING_CONFIRMATION listings for inactive meals.")
+                for listing in pending_inactive_listings:
                     meal_desc = listing.meal.description if listing.meal else "Unknown Meal"
                     seller_tg_id = listing.seller.telegram_id if listing.seller else None
                     buyer_tg_id = listing.pending_buyer_relation.telegram_id if listing.pending_buyer_relation else None
@@ -302,18 +334,18 @@ async def cleanup_past_meal_listings(app: PTBApplication = None):
 
                 await session.commit()
                 logger.info(
-                    f"Processed {len(pending_overdue_listings)} AWAITING_CONFIRMATION listings for overdue meals.")
+                    f"Processed {len(pending_inactive_listings)} AWAITING_CONFIRMATION listings for overdue meals.")
 
             # Handle AVAILABLE listings for these overdue meals
-            stmt_available_overdue_update = (
+            stmt_available_inactive_update = (
                 update(models.Listing)
                 .where(
                     models.Listing.status == models.ListingStatus.AVAILABLE,
-                    models.Listing.meal_id.in_(overdue_meal_ids)
+                    models.Listing.meal_id.in_(all_inactive_meal_ids)  # Use all inactive meal IDs
                 )
                 .values(status=models.ListingStatus.EXPIRED)
             )
-            result_available_update = await session.execute(stmt_available_overdue_update)
+            result_available_update = await session.execute(stmt_available_inactive_update)
             updated_available_count = result_available_update.rowcount
 
             if updated_available_count > 0:

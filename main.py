@@ -114,13 +114,13 @@ async def perform_startup_tasks(ptb_app: Application):
         cleanup_past_meal_listings,
         trigger='interval',
         next_run_time=datetime.now(timezone.utc),  # Run at startup then interval
-        minutes=BACKGROUND_PAST_MEAL_LISTING_CLEANUP_INTERVAL_MINUTES,
+        minutes=config.BACKGROUND_PAST_MEAL_LISTING_CLEANUP_INTERVAL_MINUTES,
         id='cleanup_past_meal_listings_job',
         replace_existing=True,
         kwargs={'app': ptb_app}
     )
     logger.info(
-        f"Scheduled background task 'cleanup_past_meal_listings' to run every {BACKGROUND_PAST_MEAL_LISTING_CLEANUP_INTERVAL_MINUTES} minutes.")
+        f"Scheduled background task 'cleanup_past_meal_listings' to run every {config.BACKGROUND_PAST_MEAL_LISTING_CLEANUP_INTERVAL_MINUTES} minutes.")
 
     scheduler_ref.start()
     logger.info("APScheduler started.")

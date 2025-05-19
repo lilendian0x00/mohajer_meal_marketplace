@@ -95,49 +95,13 @@ class Meal(Base):
     description = Column(String(255), nullable=True)
     price = Column(Float, nullable=True) # Original price from university
     price_limit = Column(Numeric(10, 2), nullable=True) # Max price it can be listed for
-
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
 
     # Relationships
-    # reservations = relationship(
-    #     'MealReservation',
-    #     back_populates='meal'
-    # )
-
     listings = relationship("Listing", back_populates="meal")  # One meal type can have many listings
 
     def __repr__(self):
-         return f"<Meal(id={self.id}, date='{self.date}', type='{self.meal_type}')>"
-
-
-# class MealReservation(Base):
-#     """Represents a specific reservation of a meal by a user."""
-#     __tablename__ = 'meal_reservations'
-#
-#     id = Column(Integer, primary_key=True, autoincrement=True)
-#     user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
-#     meal_id = Column(Integer, ForeignKey('meals.id'), nullable=False, index=True)
-#     university_reservation_code = Column(String(64), unique=True, nullable=False)
-#     reserved_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
-#
-#     # Relationships
-#     user = relationship(
-#         'User',
-#         back_populates='reservations'
-#     )
-#     meal = relationship(
-#         'Meal',
-#         back_populates='reservations'
-#     )
-#     listing = relationship(
-#         'Listing',
-#         back_populates='reservation',
-#         uselist=False, # One-to-one: A reservation can only be listed once
-#         cascade="all, delete-orphan",
-#         lazy="joined",
-#     )
-#
-#     def __repr__(self):
-#         return f"<MealReservation(id={self.id}, user_id={self.user_id}, meal_id={self.meal_id}, code='{self.university_reservation_code}')>"
+         return f"<Meal(id={self.id}, date='{self.date}', type='{self.meal_type}', active={self.is_active})>"
 
 
 class Listing(Base):

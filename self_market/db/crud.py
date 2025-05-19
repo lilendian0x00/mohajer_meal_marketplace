@@ -340,7 +340,8 @@ async def create_meal(db: AsyncSession,
         meal_type=meal_type,
         date=meal_date,
         price=price,
-        price_limit=price_limit
+        price_limit=price_limit,
+        is_active=True
     )
     db.add(new_meal)
     await db.commit()
@@ -443,7 +444,9 @@ async def get_meals_for_selling(db: AsyncSession, specific_date: date | None = N
     today = datetime.now(timezone.utc).date()
     stmt = select(models.Meal).where(
         models.Meal.date >= today,
+        models.Meal.is_active == True
     ).order_by(models.Meal.date, models.Meal.description)
+
     result = await db.execute(stmt)
     return result.scalars().all()
 
