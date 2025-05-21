@@ -222,6 +222,9 @@ if __name__ == "__main__":
             format=config.LOG_FORMAT, level=config.LOG_LEVEL, force=True
         )
         logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
+        logging.getLogger("aiosqlite").setLevel(logging.WARNING)
+        logging.getLogger("telegram.ext.ExtBot").setLevel(logging.WARNING)
         logging.getLogger('apscheduler').setLevel(logging.WARNING) # Quiet down APScheduler INFO logs
         logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
         logger.info("Logging setup complete.")

@@ -220,12 +220,13 @@ async def cleanup_past_meal_listings(app: PTBApplication = None):
 
             # We query a slightly wider range to catch all meals whose Iran cutoff might have just passed.
             # For example, if it's 1 AM UTC on the 16th, 4 PM on the 15th in Iran has passed.
-            date_range_start_utc = now_utc.date() - timedelta(days=1)
+            lower_bound_iran_date = now_utc.date() - timedelta(days=1)
+            upper_bound_iran_date = now_utc.date() + timedelta(days=1)
 
             potentially_overdue_meal_candidates_stmt = select(models.Meal).where(
-                models.Meal.date >= date_range_start_utc,
-                models.Meal.date <= now_utc.date(),  # Only meals on or before current UTC date
-                models.Meal.is_active == True # Only consider the meals that are active
+                models.Meal.date >= lower_bound_iran_date,
+                models.Meal.date <= upper_bound_iran_date,
+                models.Meal.is_active == True
             )
             result_meal_candidates = await session.execute(potentially_overdue_meal_candidates_stmt)
             meal_candidates = result_meal_candidates.scalars().all()
@@ -234,18 +235,24 @@ async def cleanup_past_meal_listings(app: PTBApplication = None):
             for meal in meal_candidates:
                 # meal.date is the date of the meal in Iran (naive)
                 # Combine meal.date (Iran) with MEAL_SERVICE_CUTOFF_TIME_IRAN (Iran)
+                logger.info(meal.date)
                 meal_cutoff_naive_iran = datetime.combine(meal.date, MEAL_SERVICE_CUTOFF_TIME_IRAN)
+                logger.info(meal_cutoff_naive_iran)
 
                 # Localize this naive datetime to Iran timezone
                 meal_cutoff_iran_aware = meal_cutoff_naive_iran.replace(tzinfo=IRAN_TZ)
 
                 # Convert Iran cutoff time to UTC
                 meal_cutoff_utc = meal_cutoff_iran_aware.astimezone(timezone.utc)
+                logger.debug(
+                    f"Checking Meal ID {meal.id} (Date: {meal.date}, Desc: {meal.description}, Active: {meal.is_active}): "
+                    f"Iran Cutoff: {meal_cutoff_iran_aware.strftime('%Y-%m-%d %H:%M:%S %Z%z')}, "
+                    f"UTC Cutoff: {meal_cutoff_utc.strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
 
                 # Check if this UTC cutoff time has passed relative to current UTC time
                 if meal_cutoff_utc < now_utc:
                     overdue_meal_ids_to_deactivate.append(meal.id)
-                    logger.debug(f"Meal ID {meal.id} (Date: {meal.date}, Desc: {meal.description}) is overdue. "
+                    logger.info(f"Meal ID {meal.id} (Date: {meal.date}, Desc: {meal.description}) is overdue. "
                                  f"Iran Cutoff: {meal_cutoff_iran_aware}, UTC Cutoff: {meal_cutoff_utc}, Now UTC: {now_utc}")
 
             if not overdue_meal_ids_to_deactivate:
@@ -259,20 +266,20 @@ async def cleanup_past_meal_listings(app: PTBApplication = None):
                 # The deactivation of meals is a separate step.
                 pass  # Continue to listing cleanup part
 
-                # Deactivate Overdue Meals
-                if overdue_meal_ids_to_deactivate:
-                    logger.info(
-                        f"Found {len(overdue_meal_ids_to_deactivate)} meal IDs to deactivate: {overdue_meal_ids_to_deactivate}")
-                    stmt_deactivate_meals = (
-                        update(models.Meal)
-                        .where(models.Meal.id.in_(overdue_meal_ids_to_deactivate))
-                        .values(is_active=False)
-                    )
-                    deactivate_result = await session.execute(stmt_deactivate_meals)
-                    deactivated_meal_count = deactivate_result.rowcount
-                    if deactivated_meal_count > 0:
-                        logger.info(f"Deactivated {deactivated_meal_count} meals.")
-                        await session.commit()  # Commit meal deactivation
+            # Deactivate Overdue Meals
+            if overdue_meal_ids_to_deactivate:
+                logger.info(
+                    f"Found {len(overdue_meal_ids_to_deactivate)} meal IDs to deactivate: {overdue_meal_ids_to_deactivate}")
+                stmt_deactivate_meals = (
+                    update(models.Meal)
+                    .where(models.Meal.id.in_(overdue_meal_ids_to_deactivate))
+                    .values(is_active=False)
+                )
+                deactivate_result = await session.execute(stmt_deactivate_meals)
+                deactivated_meal_count = deactivate_result.rowcount
+                if deactivated_meal_count > 0:
+                    logger.info(f"Deactivated {deactivated_meal_count} meals.")
+                    await session.commit()  # Commit meal deactivation
 
             # Now, get ALL meal IDs that are currently inactive, for cleaning up their listings
             # This includes newly deactivated ones and any that were already inactive
@@ -500,7 +507,8 @@ async def update_meals_from_samad(app: PTBApplication = None): # Added app param
                         meal_type="ناهار", # Assuming always "ناهار" (Lunch)
                         description=food_name,
                         price=food_price,
-                        price_limit=actual_price_limit
+                        price_limit=actual_price_limit,
+                        is_active=True,
                     )
                     processed_meals_for_db_objects.append(new_meal_obj)
                     logger.debug(f"Prepared DB object for meal: {food_name} on {meal_date_obj}")
@@ -533,7 +541,14 @@ async def update_meals_from_samad(app: PTBApplication = None): # Added app param
                         if existing_meal.price_limit != meal_to_add.price_limit:
                             existing_meal.price_limit = meal_to_add.price_limit
                             changed = True
-                        # Add other fields if necessary
+
+                        # Not needed
+                        # if not existing_meal.is_active:  # If it was inactive, but API provides it again, make it active
+                        #     existing_meal.is_active = True
+                        #     changed = True
+                        #     logger.info(
+                        #         f"Re-activating existing meal: {existing_meal.description} on {existing_meal.date}")
+
 
                         if changed:
                             session.add(existing_meal) # Add to session to mark as dirty
@@ -542,6 +557,7 @@ async def update_meals_from_samad(app: PTBApplication = None): # Added app param
                         else:
                             logger.debug(f"No changes for existing meal: {existing_meal.description} on {existing_meal.date}")
                     else:
+                        # Meal is new, is_active is already True from object creation
                         session.add(meal_to_add)
                         saved_count += 1
                         logger.info(f"Adding new meal: {meal_to_add.description} on {meal_to_add.date}")
@@ -552,14 +568,15 @@ async def update_meals_from_samad(app: PTBApplication = None): # Added app param
                 else:
                     logger.info("No new meals to save or existing meals to update in the database.")
 
-        except Exception as e_db:
-            logger.error(f"An error occurred during database operations for meals: {e_db}", exc_info=True)
-            # Consider rollback if session is available and an error occurred mid-transaction
-            # if 'session' in locals() and session.is_active:
-            #     await session.rollback()
-            #     logger.info("Database transaction rolled back due to error.")
+
+        except SQLAlchemyError as e_db:
+            logger.error(f"SQLAlchemyError during database operations for meals: {e_db}", exc_info=True)
+
+        except Exception as e_db_other:
+            logger.error(f"An unexpected error occurred during database operations for meals: {e_db_other}",
+                         exc_info=True)
     else:
-        logger.info("No processed meals to add or update in the database.")
+        logger.info("No processed meals to add or update in the database from Samad API.")
 
     # Clear the meals from the previous days and the listings related to them
     today_date = datetime.now(timezone.utc).date()
@@ -568,65 +585,11 @@ async def update_meals_from_samad(app: PTBApplication = None): # Added app param
         today_date.isoformat()
     )
 
-    deleted_listings_count = 0
-    deleted_meals_count = 0
 
-    try:
-        async with get_db_session() as session:
-            # Listings are deleted first to prevent foreign key constraint violations
-            listings_delete_stmt = delete(models.Listing).where(
-                models.Listing.meal_id.in_(
-                    select(models.Meal.id).where(models.Meal.date < today_date)
-                )
-            )
-            # Execute the deletion of targeted listings
-            listings_result = await session.execute(listings_delete_stmt)
-            deleted_listings_count = listings_result.rowcount
-            if deleted_listings_count > 0:
-                logger.debug(f"Found and targeted {deleted_listings_count} old listings for deletion.")
+    # SECTION FOR DELETING OLD MEALS AND THEIR LISTINGS IS REMOVED FROM THIS FUNCTION.
+    # This is now handled by `cleanup_past_meal_listings` and potentially another
 
-            # This will delete meals whose date is before today_date.
-            meals_delete_stmt = delete(models.Meal).where(
-                models.Meal.date < today_date
-            )
-            # Execute the deletion of targeted meals
-            meals_result = await session.execute(meals_delete_stmt)
-            deleted_meals_count = meals_result.rowcount
-            if deleted_meals_count > 0:
-                logger.debug(f"Found and targeted {deleted_meals_count} old meals for deletion.")
-
-            # Commit the transaction if any changes were made.
-            if deleted_listings_count > 0 or deleted_meals_count > 0:
-                await session.commit()
-                logger.info(
-                    "Cleanup transaction committed: Successfully deleted %d listings and %d meals dated before %s.",
-                    deleted_listings_count,
-                    deleted_meals_count,
-                    today_date.isoformat()
-                )
-            else:
-                # No need to commit if no rows were affected.
-                logger.info(
-                    "Cleanup: No meals or listings found with a date before %s. No cleanup changes committed to the database.",
-                    today_date.isoformat()
-                )
-
-    except SQLAlchemyError as exc_alchemy:
-        # The get_db_session context manager should handle rollback on exceptions.
-        logger.error(
-            "SQLAlchemyError during old meal/listing cleanup. Transaction likely rolled back. Error: %s",
-            exc_alchemy,
-            exc_info=True  # Logs the full traceback
-        )
-    except Exception as exc_general:
-        # The get_db_session context manager should handle rollback.
-        logger.error(
-            "Unexpected error during old meal/listing cleanup. Transaction likely rolled back. Error: %s",
-            exc_general,
-            exc_info=True  # Logs the full traceback
-        )
-
-    logger.info("Finished scheduled task: update_meals_from_samad")
+    logger.info("Finished scheduled task: update_meals_from_samad)")
 
 
 
