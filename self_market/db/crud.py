@@ -44,11 +44,11 @@ async def get_all_sold_listings(db: AsyncSession, page: int = 0, page_size: int 
         joinedload(models.Listing.buyer).load_only(models.User.telegram_id, models.User.username,
                                                    models.User.first_name)
     ).order_by(
-        models.Listing.sold_at.desc()
-    ).offset(offset).limit(page_size).distinct()
+        models.Listing.sold_at.desc(), models.Listing.id.desc()
+    ).offset(offset).limit(page_size)
 
     result = await db.execute(stmt)
-    listings = result.scalars().all()
+    listings = result.unique().scalars().all()
     logger.info(f"Admin fetched {len(listings)} sold listings for page {page}. Total sold: {total_count}")
     return listings, total_count
 
@@ -88,11 +88,11 @@ async def get_sold_listings_by_seller(db: AsyncSession, seller_telegram_id: int,
         joinedload(models.Listing.buyer).load_only(models.User.telegram_id, models.User.username,
                                                    models.User.first_name)
     ).order_by(
-        models.Listing.sold_at.desc()
-    ).offset(offset).limit(page_size).distinct()
+        models.Listing.sold_at.desc(), models.Listing.id.desc()
+    ).offset(offset).limit(page_size)
 
     result = await db.execute(stmt)
-    listings = result.scalars().all()
+    listings = result.unique().scalars().all()
     logger.info(f"Admin fetched {len(listings)} sold listings for seller {seller_telegram_id} on page {page}. Total for seller: {total_count}")
     return listings, total_count, seller_user
 
@@ -348,6 +348,23 @@ async def create_meal(db: AsyncSession,
     await db.refresh(new_meal)
     logger.info(f"Created new meal: {new_meal.description} for {new_meal.date}")
     return new_meal
+
+
+async def get_listing_details_for_admin(db: AsyncSession, listing_id: int) -> models.Listing | None:
+    """
+    Fetches a listing by its ID for admin viewing, including all relevant relationships.
+    """
+    logger.debug(f"Admin fetching details for listing ID: {listing_id}")
+    stmt = select(models.Listing).where(
+        models.Listing.id == listing_id
+    ).options(
+        joinedload(models.Listing.meal),
+        joinedload(models.Listing.seller),
+        joinedload(models.Listing.buyer),
+        joinedload(models.Listing.pending_buyer_relation)
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
 
 
 async def get_meal_by_id(db: AsyncSession, meal_id: int) -> models.Meal | None:

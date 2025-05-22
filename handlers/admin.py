@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 from telegram.constants import ParseMode
-from config import ADMIN_TELEGRAM_IDS, USERS_LIST_PAGE_SIZE, HISTORY_PAGE_SIZE
+from config import ADMIN_TELEGRAM_IDS, USERS_LIST_PAGE_SIZE, HISTORY_PAGE_SIZE, SOLD_MEALS_LIST_PAGE_SIZE
 from handlers import CALLBACK_ADMIN_REFRESH_STATS
 from self_market.db.session import get_db_session
 from self_market.db import crud
@@ -90,6 +90,7 @@ async def help_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "\n",
 
         "🏷️ *مدیریت آگهی‌ها:*\n",
+        f"`/getlisting <listing_id>` {escape_markdown_v2('- نمایش جزئیات کامل یک آگهی خاص')}\n"
         f"`/dellisting <listing_id>` {escape_markdown_v2('- حذف یک آگهی خاص از سیستم')}\n",
         f"`/allsold [page]` {escape_markdown_v2('- نمایش تمام آگهی‌های فروخته شده (صفحه‌بندی شده)')}\n",
         f"`/usersold <user_id> [page]` {escape_markdown_v2('- نمایش آگهی‌های فروخته شده توسط یک کاربر خاص (صفحه‌بندی شده)')}\n",
@@ -110,99 +111,335 @@ async def help_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 
-# --- Helper function to format and send sold listings ---
+@admin_required
+async def get_listing_details_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin command to get detailed information about a specific listing."""
+    message = update.message
+    if not message or not context.args or len(context.args) != 1:
+        await message.reply_text(
+            f"استفاده: `\n{escape_markdown_v2('/getlisting <listing_id>')}`",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return
+
+    try:
+        listing_id_to_find = int(context.args[0])
+    except ValueError:
+        await message.reply_text(
+            escape_markdown_v2("آیدی آگهی باید یک عدد باشد."),
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return
+
+    logger.info(f"Admin {update.effective_user.id} requesting details for listing ID: {listing_id_to_find}")
+
+    async with get_db_session() as db_session:
+        listing = await crud.get_listing_details_for_admin(db_session, listing_id_to_find)
+
+    if not listing:
+        await message.reply_text(
+            f"آگهی با آیدی `{listing_id_to_find}` یافت نشد.",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return
+
+    # --- Format Listing Details ---
+    details_parts = [f"🔍 *جزئیات آگهی ID: `{listing.id}`*\n"]
+
+    # Meal Info
+    if listing.meal:
+        meal_desc = escape_markdown_v2(listing.meal.description or "نامشخص")
+        meal_type = escape_markdown_v2(listing.meal.meal_type or "نامشخص")
+        meal_date_shamsi = format_gregorian_date_to_shamsi(listing.meal.date)
+        meal_price_orig = f"{listing.meal.price:,.0f}" if listing.meal.price is not None else "نامشخص"
+        meal_price_limit = f"{listing.meal.price_limit:,.0f}" if listing.meal.price_limit is not None else "ندارد"
+        details_parts.append(
+            f"🍲 *غذا:*\n"
+            f"  ▫️ توضیحات: {meal_desc}\n"
+            f"  ▫️ نوع: {meal_type}\n"
+            f"  ▫️ تاریخ غذا: {meal_date_shamsi}\n"
+            f"  ▫️ قیمت اصلی غذا: {escape_markdown_v2(meal_price_orig)} تومان\n"
+            f"  ▫️ سقف قیمت فروش: {escape_markdown_v2(meal_price_limit)} تومان\n"
+            f"  ▫️ غذای فعال: {'✅' if listing.meal.is_active else '❌'}"
+        )
+    else:
+        details_parts.append("🍲 غذا: اطلاعات غذا یافت نشد.")
+
+    # Seller Info
+    if listing.seller:
+        seller_tg_id = listing.seller.telegram_id
+        seller_username = f"@{escape_markdown_v2(listing.seller.username)}" if listing.seller.username else "ندارد"
+        seller_name = escape_markdown_v2(listing.seller.first_name or "نامشخص")
+        details_parts.append(
+            f"🧑‍🍳 *فروشنده:*\n"
+            f"  ▫️ آیدی تلگرام: `{seller_tg_id}`\n"
+            f"  ▫️ نام کاربری: {seller_username}\n"
+            f"  ▫️ نام: {seller_name}"
+        )
+    else:
+        details_parts.append("🧑‍🍳 فروشنده: اطلاعات فروشنده یافت نشد.")
+
+    # Listing Specifics
+    listing_price = f"{listing.price:,.0f}" if listing.price is not None else "نامشخص"
+    listing_status_map = {
+        models.ListingStatus.AVAILABLE: "✅ موجود",
+        models.ListingStatus.AWAITING_CONFIRMATION: "⏳ در انتظار تایید فروشنده",
+        models.ListingStatus.SOLD: "💰 فروخته شده",
+        models.ListingStatus.CANCELLED: "❌ لغو شده توسط فروشنده",
+        models.ListingStatus.EXPIRED: "🚫 منقضی شده",
+    }
+    listing_status_display = listing_status_map.get(listing.status, escape_markdown_v2(listing.status.value))
+
+    created_at_shamsi_time = "نامشخص"
+    if listing.created_at:
+        created_at_shamsi = format_gregorian_date_to_shamsi(listing.created_at)
+        time_str = listing.created_at.strftime('%H:%M:%S')
+        created_at_shamsi_time = escape_markdown_v2(f"{created_at_shamsi} {time_str}")
+
+    updated_at_shamsi_time = "نامشخص"
+    if listing.updated_at:
+        updated_at_shamsi = format_gregorian_date_to_shamsi(listing.updated_at)
+        time_str = listing.updated_at.strftime('%H:%M:%S')
+        updated_at_shamsi_time = escape_markdown_v2(f"{updated_at_shamsi} {time_str}")
+
+    details_parts.append(
+        f"🏷️ *مشخصات آگهی:*\n"
+        f"  ▫️ کد رزرو دانشگاه: `{escape_markdown_v2(listing.university_reservation_code)}`\n"
+        f"  ▫️ قیمت فروش: {escape_markdown_v2(listing_price)} تومان\n"
+        f"  ▫️ وضعیت: {listing_status_display}\n"
+        f"  ▫️ تاریخ ایجاد: {created_at_shamsi_time}\n"
+        f"  ▫️ تاریخ بروزرسانی: {updated_at_shamsi_time}"
+    )
+
+    # Pending Buyer Info (if AWAITING_CONFIRMATION)
+    if listing.status == models.ListingStatus.AWAITING_CONFIRMATION and listing.pending_buyer_relation:
+        pb_tg_id = listing.pending_buyer_relation.telegram_id
+        pb_username = f"@{escape_markdown_v2(listing.pending_buyer_relation.username)}" if listing.pending_buyer_relation.username else "ندارد"
+        pb_name = escape_markdown_v2(listing.pending_buyer_relation.first_name or "نامشخص")
+        pending_until_shamsi_time = "نامشخص"
+        if listing.pending_until:
+            pending_until_shamsi = format_gregorian_date_to_shamsi(listing.pending_until)
+            time_str = listing.pending_until.strftime('%H:%M:%S %Z')
+            pending_until_shamsi_time = escape_markdown_v2(f"{pending_until_shamsi} {time_str}")
+        buyer_notified_at_shamsi_time = "هنوز خیر"
+        if listing.buyer_notified_payment_at:
+            buyer_notified_at_shamsi = format_gregorian_date_to_shamsi(listing.buyer_notified_payment_at)
+            time_str = listing.buyer_notified_payment_at.strftime('%H:%M:%S %Z')
+            buyer_notified_at_shamsi_time = escape_markdown_v2(f"{buyer_notified_at_shamsi} {time_str}")
+
+        details_parts.append(
+            f"⏳ *خریدار در انتظار تایید:*\n"
+            f"  ▫️ آیدی تلگرام: `{pb_tg_id}`\n"
+            f"  ▫️ نام کاربری: {pb_username}\n"
+            f"  ▫️ نام: {pb_name}\n"
+            f"  ▫️ مهلت تایید فروشنده تا: {pending_until_shamsi_time}\n"
+            f"  ▫️ خریدار اعلام واریز کرده: {buyer_notified_at_shamsi_time}"
+        )
+
+    # Buyer Info (if SOLD)
+    if listing.status == models.ListingStatus.SOLD and listing.buyer:
+        buyer_tg_id = listing.buyer.telegram_id
+        buyer_username = f"@{escape_markdown_v2(listing.buyer.username)}" if listing.buyer.username else "ندارد"
+        buyer_name = escape_markdown_v2(listing.buyer.first_name or "نامشخص")
+        sold_at_shamsi_time = "نامشخص"
+        if listing.sold_at:
+            sold_at_shamsi = format_gregorian_date_to_shamsi(listing.sold_at)
+            time_str = listing.sold_at.strftime('%H:%M:%S %Z')
+            sold_at_shamsi_time = escape_markdown_v2(f"{sold_at_shamsi} {time_str}")
+
+        details_parts.append(
+            f"💰 *خریدار نهایی:*\n"
+            f"  ▫️ آیدی تلگرام: `{buyer_tg_id}`\n"
+            f"  ▫️ نام کاربری: {buyer_username}\n"
+            f"  ▫️ نام: {buyer_name}\n"
+            f"  ▫️ تاریخ فروش: {sold_at_shamsi_time}"
+        )
+
+    # Cancellation/Expiration Info
+    if listing.status == models.ListingStatus.CANCELLED and listing.cancelled_at:
+        cancelled_at_shamsi_time = "نامشخص"
+        cancelled_at_shamsi = format_gregorian_date_to_shamsi(listing.cancelled_at)
+        time_str = listing.cancelled_at.strftime('%H:%M:%S %Z')
+        cancelled_at_shamsi_time = escape_markdown_v2(f"{cancelled_at_shamsi} {time_str}")
+        reason = "توسط فروشنده" # Default
+        if listing.cancelled_by_buyer_at:
+            reason = "توسط خریدار (در مرحله انتظار)"
+        elif listing.rejected_by_seller_at:
+             reason = "توسط فروشنده (در مرحله انتظار)"
+        details_parts.append(f"❌ لغو شده در: {cancelled_at_shamsi_time} ({escape_markdown_v2(reason)})")
+
+    elif listing.status == models.ListingStatus.EXPIRED and listing.updated_at : # Using updated_at as a proxy for expiration time
+        # Note: For true expiration time, you'd ideally have an `expired_at` field.
+        # Here, `updated_at` is when the status was changed to EXPIRED by the background job.
+        expired_at_shamsi_time = "نامشخص"
+        expired_at_shamsi = format_gregorian_date_to_shamsi(listing.updated_at) # Using updated_at
+        time_str = listing.updated_at.strftime('%H:%M:%S %Z')
+        expired_at_shamsi_time = escape_markdown_v2(f"{expired_at_shamsi} {time_str}")
+        details_parts.append(f"🚫 منقضی شده در: {expired_at_shamsi_time} (به دلیل پایان زمان سرویس غذا)")
+
+
+    full_details_message = "\n\n".join(details_parts)
+    if len(full_details_message) > 4096:
+        logger.warning(f"Listing details message for ID {listing.id} is too long. Truncating.")
+        full_details_message = full_details_message[:4090] + "\n\n\\.\\.\\.(ادامه دارد)"
+
+    await message.reply_text(
+        text=full_details_message,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+
+# Helper function to format and send sold listings
 async def _send_sold_listings_page(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    page: int,
-    listings: list[models.Listing],
-    total_count: int,
-    page_size: int,
-    title_prefix: str,
-    callback_data_prefix: str
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        page: int,
+        listings_from_db: list[models.Listing],
+        total_count: int,
+        page_size: int,
+        title_prefix: str,
+        callback_data_prefix: str
 ):
-    """
-    Helper function to format and send a paginated list of sold listings.
-    """
     query = update.callback_query
     message_to_edit_or_reply = update.message or (query.message if query else None)
-    if not message_to_edit_or_reply: return
+    if not message_to_edit_or_reply:
+        logger.warning("_send_sold_listings_page: No message context to reply or edit.")
+        return
 
-    user_id = update.effective_user.id
+    final_text_parts: list[str] = []
+    reply_markup: InlineKeyboardMarkup | None = None  # Initialize
 
-    if not listings and page == 0:
-        text = f"{title_prefix}\n\n{escape_markdown_v2('هیچ آیتم فروخته شده‌ای یافت نشد.')}"
-        reply_markup = None # No pagination if no items
+    if not listings_from_db and page == 0:
+        final_text_parts.append(f"{title_prefix}\n")  # Add title even if no items
+        final_text_parts.append(escape_markdown_v2("هیچ آیتم فروخته شده‌ای یافت نشد."))
+        # reply_markup remains None
     else:
-        text_parts = [f"{title_prefix} \\(صفحه {page + 1}\\)\n"]
-        for l in listings:
-            meal_desc = escape_markdown_v2(l.meal.description if l.meal else "غذای نامشخص")
-            meal_date_shamsi = format_gregorian_date_to_shamsi(l.meal.date if l.meal else None)
-            sold_at_shamsi_time = "تاریخ نامشخص"
-            if l.sold_at:
-                sold_at_shamsi_time = format_gregorian_date_to_shamsi(l.sold_at) + " " + l.sold_at.strftime('%H:%M')
+        final_text_parts.append(f"{title_prefix} \\(صفحه {page + 1}\\)\n")
 
-            seller_info_parts = []
-            if l.seller:
-                seller_info_parts.append(f"🧑‍🍳 فروشنده: ")
-                if l.seller.username:
-                    seller_info_parts.append(f"@{escape_markdown_v2(l.seller.username)}")
+        for listing_item in listings_from_db:
+            current_item_details: list[str] = []
+
+            current_item_details.append(f"🆔 آگهی: `{listing_item.id}`")
+
+            meal_info_str = "اطلاعات غذا نامشخص"
+            if listing_item.meal:
+                meal_desc = escape_markdown_v2(listing_item.meal.description or "غذای نامشخص")
+                meal_date_shamsi = format_gregorian_date_to_shamsi(listing_item.meal.date)
+                meal_info_str = f"🍲 غذا: *{meal_desc}* \\(تاریخ غذا: {meal_date_shamsi}\\)"
+            else:
+                meal_info_str = f"🍲 غذا: {escape_markdown_v2(meal_info_str)}"
+            current_item_details.append(meal_info_str)
+
+            seller_info_str = "اطلاعات فروشنده نامشخص"
+            if listing_item.seller:
+                seller_display_parts = [f"🧑‍🍳 فروشنده: "]
+                if listing_item.seller.username:
+                    seller_display_parts.append(f"@{escape_markdown_v2(listing_item.seller.username)}")
                 else:
-                    seller_info_parts.append(escape_markdown_v2(l.seller.first_name or "ناشناس"))
-                seller_info_parts.append(f" \\(ID: `{l.seller.telegram_id}`\\)")
-            seller_info = "".join(seller_info_parts)
+                    seller_display_parts.append(escape_markdown_v2(listing_item.seller.first_name or "ناشناس"))
+                seller_display_parts.append(f" \\(ID: `{listing_item.seller.telegram_id}`\\)")
+                seller_info_str = "".join(seller_display_parts)
+            else:
+                seller_info_str = f"🧑‍🍳 فروشنده: {escape_markdown_v2(seller_info_str)}"
+            current_item_details.append(seller_info_str)
 
-
-            buyer_info_parts = []
-            if l.buyer:
-                buyer_info_parts.append(f"🛍️ خریدار: ")
-                if l.buyer.username:
-                    buyer_info_parts.append(f"@{escape_markdown_v2(l.buyer.username)}")
+            buyer_info_str = "اطلاعات خریدار نامشخص"
+            if listing_item.buyer:
+                buyer_display_parts = [f"🛍️ خریدار: "]
+                if listing_item.buyer.username:
+                    buyer_display_parts.append(f"@{escape_markdown_v2(listing_item.buyer.username)}")
                 else:
-                    buyer_info_parts.append(escape_markdown_v2(l.buyer.first_name or "ناشناس"))
-                buyer_info_parts.append(f" \\(ID: `{l.buyer.telegram_id}`\\)")
-            buyer_info = "".join(buyer_info_parts)
+                    buyer_display_parts.append(escape_markdown_v2(listing_item.buyer.first_name or "ناشناس"))
+                buyer_display_parts.append(f" \\(ID: `{listing_item.buyer.telegram_id}`\\)")
+                buyer_info_str = "".join(buyer_display_parts)
+            else:
+                buyer_info_str = f"🛍️ خریدار: {escape_markdown_v2(buyer_info_str)}"
+            current_item_details.append(buyer_info_str)
 
-            price_formatted = f"{l.price:,.0f}" if l.price is not None else "نامشخص"
+            price_formatted = f"{listing_item.price:,.0f}" if listing_item.price is not None else "نامشخص"
+            current_item_details.append(f"💰 قیمت: {escape_markdown_v2(price_formatted)} تومان")
 
-            text_parts.append(
-                f"🆔 آگهی: `{l.id}`\n"
-                f"🍲 غذا: *{meal_desc}* \\(تاریخ غذا: {meal_date_shamsi}\\)\n"
-                f"{seller_info}\n"
-                f"{buyer_info}\n"
-                f"💰 قیمت: {escape_markdown_v2(price_formatted)} تومان\n"
-                f"📅 تاریخ فروش: {escape_markdown_v2(sold_at_shamsi_time)}\n"
-                f"─" * 15 # Short separator
-            )
-        text = "\n".join(text_parts)
+            sold_at_display = "تاریخ فروش نامشخص"
+            if listing_item.sold_at:
+                sold_date_shamsi = format_gregorian_date_to_shamsi(listing_item.sold_at)
+                sold_time_str = listing_item.sold_at.strftime('%H:%M')
+                sold_at_display = f"{sold_date_shamsi} {sold_time_str}"
+            current_item_details.append(f"📅 تاریخ فروش: {escape_markdown_v2(sold_at_display)}")
 
+            listing_block_text = "\n".join(current_item_details)
+            final_text_parts.append(listing_block_text)
+            # Add separator only if it's not the last item (or handle it after the loop)
+            # For simplicity, we'll join with two newlines later if needed.
+
+        # Pagination Buttons
         total_pages = (total_count + page_size - 1) // page_size
         keyboard_buttons_row = []
         if page > 0:
-            keyboard_buttons_row.append(InlineKeyboardButton("« قبلی", callback_data=f"{callback_data_prefix}{page - 1}"))
+            keyboard_buttons_row.append(
+                InlineKeyboardButton("« قبلی", callback_data=f"{callback_data_prefix}{page - 1}"))
         if total_pages > 1:
-            keyboard_buttons_row.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data=CALLBACK_ADMIN_SOLD_NOOP))
-        if page < total_pages - 1:
-            keyboard_buttons_row.append(InlineKeyboardButton("بعدی »", callback_data=f"{callback_data_prefix}{page + 1}"))
+            keyboard_buttons_row.append(
+                InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data=CALLBACK_ADMIN_SOLD_NOOP))
+        if (page + 1) * page_size < total_count:  # Check if there are more items for a next page
+            keyboard_buttons_row.append(
+                InlineKeyboardButton("بعدی »", callback_data=f"{callback_data_prefix}{page + 1}"))
 
-        reply_markup = InlineKeyboardMarkup([keyboard_buttons_row]) if keyboard_buttons_row else None
+        if keyboard_buttons_row:  # Only create markup if there are buttons
+            reply_markup = InlineKeyboardMarkup([keyboard_buttons_row])
 
-    if query:
-        try:
-            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
-        except BadRequest as e:
-            if "Message is not modified" in str(e):
-                logger.info(f"Sold listings page for admin {user_id} not modified.")
-                await query.answer("صفحه تغییری نکرده است.")
-            else:
-                logger.error(f"Error editing sold listings message for admin {user_id}: {e}", exc_info=True)
-                await query.answer("خطا در بروزرسانی لیست.")
-        except Exception as e_edit:
-            logger.error(f"Unexpected error editing sold listings for admin {user_id}: {e_edit}", exc_info=True)
-            await query.answer("خطای ناشناخته در بروزرسانی.")
-    else:
-        await message_to_edit_or_reply.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+    # Join all parts to form the final message text
+    # The first part is the title. Other parts are item blocks.
+    # We want title, then newline, then item1, then two newlines, then item2 etc.
+    if len(final_text_parts) > 1 and final_text_parts[0].endswith("\n"):  # If title ends with newline
+        # And if the first item part does not start with one
+        # The structure is [title_with_newline, item1_block, item2_block, ...]
+        # Join item blocks with double newlines, then prepend title.
+        items_section = ("\n\n" + "─" * 15 + "\n\n").join(final_text_parts[1:])
+        final_message_text = final_text_parts[0] + items_section
+    elif final_text_parts:  # Only title, or title + items where title doesn't end with newline
+        items_section = ("\n\n" + "─" * 15 + "\n\n").join(final_text_parts[1:])
+        if len(final_text_parts) > 1:  # Has items after title
+            final_message_text = final_text_parts[0] + "\n" + items_section
+        else:  # Only title
+            final_message_text = final_text_parts[0]
+    else:  # Should be caught by the "no items" case, but as a fallback
+        final_message_text = escape_markdown_v2("اطلاعاتی برای نمایش وجود ندارد.")
 
+    # Safeguard for overall message length
+    if len(final_message_text) > 4096:
+        effective_user_id = update.effective_user.id if update.effective_user else "UnknownUser"
+        logger.warning(
+            f"[User:{effective_user_id}] Final message text is too long ({len(final_message_text)} chars) for title '{title_prefix}', page {page}. Truncating."
+        )
+        safe_text = final_message_text[:4050]
+        last_newline_in_safe = safe_text.rfind('\n')
+        if last_newline_in_safe != -1:
+            safe_text = safe_text[:last_newline_in_safe]
+        final_message_text = safe_text + f"\n\n{escape_markdown_v2('... (لیست برای نمایش خلاصه شد)')}"
+
+    # Sending logic
+    try:
+        if query:
+            await query.edit_message_text(final_message_text, reply_markup=reply_markup,
+                                          parse_mode=ParseMode.MARKDOWN_V2)
+        else:
+            await message_to_edit_or_reply.reply_text(final_message_text, reply_markup=reply_markup,
+                                                      parse_mode=ParseMode.MARKDOWN_V2)
+    except BadRequest as e:
+        effective_user_id = update.effective_user.id if update.effective_user else "UnknownUser"
+        if "Message is not modified" in str(e):
+            logger.info(f"[User:{effective_user_id}] Message not modified for page {page} of '{title_prefix}'.")
+            if query: await query.answer("صفحه تغییری نکرده است.")
+        else:
+            logger.error(
+                f"[User:{effective_user_id}] BadRequest sending message for page {page} of '{title_prefix}': {e}. Text length: {len(final_message_text)}",
+                exc_info=True)
+            if query: await query.answer("خطا در بروزرسانی لیست.", show_alert=True)
+    except Exception as e_send:
+        effective_user_id = update.effective_user.id if update.effective_user else "UnknownUser"
+        logger.error(
+            f"[User:{effective_user_id}] Unexpected error sending message for page {page} of '{title_prefix}': {e_send}. Text length: {len(final_message_text)}",
+            exc_info=True)
+        if query: await query.answer("خطای ناشناخته در بروزرسانی.", show_alert=True)
 
 # 1. Handler for showing ALL sold meals
 @admin_required
@@ -215,10 +452,10 @@ async def show_all_sold_meals_command(update: Update, context: ContextTypes.DEFA
 
     await update.message.reply_text("در حال دریافت لیست تمام غذاهای فروخته شده...")
     async with get_db_session() as db_session:
-        listings, total_count = await crud.get_all_sold_listings(db_session, page=page, page_size=HISTORY_PAGE_SIZE)
+        listings, total_count = await crud.get_all_sold_listings(db_session, page=page, page_size=SOLD_MEALS_LIST_PAGE_SIZE)
 
     await _send_sold_listings_page(
-        update, context, page, listings, total_count, HISTORY_PAGE_SIZE,
+        update, context, page, listings, total_count, SOLD_MEALS_LIST_PAGE_SIZE,
         title_prefix="📦 *لیست تمام غذاهای فروخته شده*",
         callback_data_prefix=CALLBACK_ADMIN_ALL_SOLD_PAGE
     )
@@ -236,10 +473,10 @@ async def show_all_sold_meals_callback(update: Update, context: ContextTypes.DEF
         return
 
     async with get_db_session() as db_session:
-        listings, total_count = await crud.get_all_sold_listings(db_session, page=page, page_size=HISTORY_PAGE_SIZE)
+        listings, total_count = await crud.get_all_sold_listings(db_session, page=page, page_size=SOLD_MEALS_LIST_PAGE_SIZE)
 
     await _send_sold_listings_page(
-        update, context, page, listings, total_count, HISTORY_PAGE_SIZE,
+        update, context, page, listings, total_count, SOLD_MEALS_LIST_PAGE_SIZE,
         title_prefix="📦 *لیست تمام غذاهای فروخته شده*",
         callback_data_prefix=CALLBACK_ADMIN_ALL_SOLD_PAGE
     )
@@ -251,7 +488,7 @@ async def show_user_sold_meals_command(update: Update, context: ContextTypes.DEF
     """Command handler to show sold meals for a specific user, paginated."""
     message = update.message
     if not context.args or len(context.args) == 0:
-        await message.reply_text(f"استفاده: `{escape_markdown_v2('/usersold <user_telegram_id> [page_number]')}`", parse_mode=ParseMode.MARKDOWN_V2)
+        await message.reply_text(f"استفاده: \n`{escape_markdown_v2('/usersold <user_telegram_id> [page_number]')}`", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     try:
@@ -269,7 +506,7 @@ async def show_user_sold_meals_command(update: Update, context: ContextTypes.DEF
 
     async with get_db_session() as db_session:
         listings, total_count, seller_user = await crud.get_sold_listings_by_seller(
-            db_session, seller_telegram_id=target_seller_tg_id, page=page, page_size=HISTORY_PAGE_SIZE
+            db_session, seller_telegram_id=target_seller_tg_id, page=page, page_size=SOLD_MEALS_LIST_PAGE_SIZE
         )
 
     if not seller_user:
@@ -282,7 +519,7 @@ async def show_user_sold_meals_command(update: Update, context: ContextTypes.DEF
     callback_prefix_with_user = f"{CALLBACK_ADMIN_USER_SOLD_PAGE_PREFIX}{target_seller_tg_id}_"
 
     await _send_sold_listings_page(
-        update, context, page, listings, total_count, HISTORY_PAGE_SIZE,
+        update, context, page, listings, total_count, SOLD_MEALS_LIST_PAGE_SIZE,
         title_prefix=title,
         callback_data_prefix=callback_prefix_with_user
     )
@@ -468,7 +705,7 @@ async def bot_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def set_admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.message
     if not message or not context.args or len(context.args) != 2:
-        await message.reply_text("استفاده: `/setadmin <user_telegram_id> <true|false>`", parse_mode=ParseMode.MARKDOWN_V2)
+        await message.reply_text("استفاده:\n `/setadmin <user_telegram_id> <true|false>`", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     try:
@@ -478,7 +715,7 @@ async def set_admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             raise ValueError("مقدار دوم باید 'true' یا 'false' باشد.")
         is_admin = is_admin_str == 'true'
     except (ValueError, IndexError) as e:
-        await message.reply_text(f"ورودی نامعتبر: {escape_markdown_v2(str(e))}\nاستفاده: `/setadmin <user_telegram_id> <true|false>`", parse_mode=ParseMode.MARKDOWN_V2)
+        await message.reply_text(f"ورودی نامعتبر: {escape_markdown_v2(str(e))}\nاستفاده:\n `/setadmin <user_telegram_id> <true|false>`", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     async with get_db_session() as db_session:
@@ -493,7 +730,7 @@ async def set_admin_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def set_active_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.message
     if not message or not context.args or len(context.args) != 2:
-        await message.reply_text("استفاده: `/setactive <user_telegram_id> <true|false>`", parse_mode=ParseMode.MARKDOWN_V2)
+        await message.reply_text("استفاده:\n `/setactive <user_telegram_id> <true|false>`", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     try:
@@ -503,7 +740,7 @@ async def set_active_status(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             raise ValueError("مقدار دوم باید 'true' یا 'false' باشد.")
         is_active = is_active_str == 'true'
     except (ValueError, IndexError) as e:
-        await message.reply_text(f"ورودی نامعتبر: {escape_markdown_v2(str(e))}\nاستفاده: `/setactive <user_telegram_id> <true|false>`", parse_mode=ParseMode.MARKDOWN_V2)
+        await message.reply_text(f"ورودی نامعتبر: {escape_markdown_v2(str(e))}\nاستفاده:\n `/setactive <user_telegram_id> <true|false>`", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     async with get_db_session() as db_session:
@@ -520,7 +757,7 @@ async def get_user_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     message = update.message
     if not message or not context.args or len(context.args) != 1:
         await message.reply_text(
-            f"استفاده: `{escape_markdown_v2('/getuser <user_telegram_id | @username>')}`",
+            f"استفاده: \n`{escape_markdown_v2('/getuser <user_telegram_id | @username>')}`",
             parse_mode=ParseMode.MARKDOWN_V2
         )
         return
@@ -849,7 +1086,7 @@ async def add_meal_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def delete_meal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.message
     if not message or not context.args or len(context.args) != 1:
-        await message.reply_text("استفاده: `/delmeal <meal_id>`", parse_mode=ParseMode.MARKDOWN_V2)
+        await message.reply_text("استفاده:\n `/delmeal <meal_id>`", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     try:
@@ -877,7 +1114,7 @@ async def delete_meal_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def delete_listing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.message
     if not message or not context.args or len(context.args) != 1:
-        await message.reply_text("استفاده: `/dellisting <listing_id>`", parse_mode=ParseMode.MARKDOWN_V2)
+        await message.reply_text("استفاده:\n `/dellisting <listing_id>`", parse_mode=ParseMode.MARKDOWN_V2)
         return
 
     try:

@@ -63,6 +63,7 @@ __all__ = [
     'set_admin_status', 'set_active_status', 'get_user_info',
     'list_users_command', 'list_users_callback', 'admin_noop_callback', # Added admin_noop_callback
     'add_meal_conv_handler', # Add the conversation handler itself
+    'get_listing_details_command',
     'delete_meal_command', 'delete_listing_command',
     'bot_statistics', 'show_all_sold_meals_command', 'show_all_sold_meals_callback',
     'show_user_sold_meals_command', 'show_user_sold_meals_callback',
