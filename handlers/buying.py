@@ -15,7 +15,7 @@ from .common import (
     CALLBACK_BUY_REFRESH, CALLBACK_BUYER_CANCEL_PENDING,
     CALLBACK_SELLER_REJECT_PENDING, get_main_menu_keyboard, CALLBACK_BUYER_PAYMENT_SENT
 )
-import utility
+from utility import escape_markdown_v2, format_gregorian_date_to_shamsi, generate_qr_code_image
 from self_market.db.session import get_db_session
 from self_market.db import crud
 from self_market import models
@@ -35,11 +35,11 @@ async def _generate_buy_food_response(db_session: crud.AsyncSession) -> tuple[st
     """
     available_listings = await crud.get_available_listings(db_session) # Should load seller+meal
 
-    title = utility.escape_markdown_v2("🛒 لیست غذاهای موجود برای خرید:\n\n")
+    title = escape_markdown_v2("🛒 لیست غذاهای موجود برای خرید:\n\n")
     refresh_button = InlineKeyboardButton("🔄 بروزرسانی لیست", callback_data=CALLBACK_BUY_REFRESH)
 
     if not available_listings:
-        message_text = title + utility.escape_markdown_v2("در حال حاضر هیچ غذایی برای فروش ثبت نشده است.")
+        message_text = title + escape_markdown_v2("در حال حاضر هیچ غذایی برای فروش ثبت نشده است.")
         # Still include Refresh button even if no listings
         reply_markup = InlineKeyboardMarkup([[refresh_button]])
         return message_text, reply_markup
@@ -59,15 +59,15 @@ async def _generate_buy_food_response(db_session: crud.AsyncSession) -> tuple[st
             meal_type_raw = meal.meal_type or meal_type_raw
             if meal.date:
                 meal_date_obj = meal.date
-                shamsi_date_str_raw = utility.format_gregorian_date_to_shamsi(meal_date_obj)
+                shamsi_date_str_raw = format_gregorian_date_to_shamsi(meal_date_obj)
                 day_of_week_int = meal_date_obj.weekday()
                 persian_day_name_raw = PERSIAN_DAYS_MAP.get(day_of_week_int, "روز نامشخص")
 
         # Escape user-generated content
-        meal_desc = utility.escape_markdown_v2(meal_desc_raw)
-        meal_type = utility.escape_markdown_v2(meal_type_raw)
-        shamsi_date_str = utility.escape_markdown_v2(shamsi_date_str_raw)
-        persian_day_name = utility.escape_markdown_v2(persian_day_name_raw)
+        meal_desc = escape_markdown_v2(meal_desc_raw)
+        meal_type = escape_markdown_v2(meal_type_raw)
+        shamsi_date_str = escape_markdown_v2(shamsi_date_str_raw)
+        persian_day_name = escape_markdown_v2(persian_day_name_raw)
 
         # Escape seller name for Markdown V2 compatibility if needed, or use regular Markdown
         seller_name_raw_display = "ناشناس"
@@ -75,24 +75,24 @@ async def _generate_buy_food_response(db_session: crud.AsyncSession) -> tuple[st
             seller_name_raw_display = listing.seller.first_name
 
         # Prepare the display part of the link, escaping it
-        escaped_seller_display_name = utility.escape_markdown_v2(seller_name_raw_display)
+        escaped_seller_display_name = escape_markdown_v2(seller_name_raw_display)
 
-        seller_name_md = utility.escape_markdown_v2("ناشناس")  # Default if no seller info
+        seller_name_md = escape_markdown_v2("ناشناس")  # Default if no seller info
         if listing.seller:
             seller_telegram_id = listing.seller.telegram_id
             if listing.seller.username:
                 username_display_text = f"@{listing.seller.username}"
-                escaped_link_text = utility.escape_markdown_v2(username_display_text)
+                escaped_link_text = escape_markdown_v2(username_display_text)
                 seller_name_md = f"[{escaped_link_text}](https://t.me/{listing.seller.username})"
             else:
                 first_name_raw = listing.seller.first_name if listing.seller.first_name else "ناشناس"
                 link_text_raw = f"{first_name_raw} (ID: {seller_telegram_id})"  # Keep (ID: ...) unescaped inside link text for now
-                escaped_link_text = utility.escape_markdown_v2(link_text_raw)
+                escaped_link_text = escape_markdown_v2(link_text_raw)
                 seller_name_md = f"[{escaped_link_text}](tg://user?id={seller_telegram_id})"
 
 
         price_str_raw = f"{listing.price:,.0f}" if listing.price is not None else "نامشخص"
-        price_str = utility.escape_markdown_v2(price_str_raw)
+        price_str = escape_markdown_v2(price_str_raw)
 
         part = (
             f"🍽️ *{meal_desc}* \\({meal_type} \\- {persian_day_name}، {shamsi_date_str}\\)\n"
@@ -109,7 +109,7 @@ async def _generate_buy_food_response(db_session: crud.AsyncSession) -> tuple[st
             )
         ])
         # Add a separator after each listing's details
-        response_parts.append(utility.escape_markdown_v2("--------------------") + "\n")
+        response_parts.append(escape_markdown_v2("--------------------") + "\n")
 
     # Add the refresh button as the last row
     inline_buttons.append([refresh_button])
@@ -125,7 +125,7 @@ async def _generate_buy_food_response(db_session: crud.AsyncSession) -> tuple[st
         last_newline = truncated_message.rfind('\n')
         if last_newline != -1:
             truncated_message = truncated_message[:last_newline]
-        full_message = truncated_message + "\n" + utility.escape_markdown_v2("...\n(لیست برای نمایش خلاصه شد)")
+        full_message = truncated_message + "\n" + escape_markdown_v2("...\n(لیست برای نمایش خلاصه شد)")
 
     return full_message, reply_markup
 
@@ -246,6 +246,42 @@ async def handle_purchase_button(update: Update, context: ContextTypes.DEFAULT_T
     """Handles the initial 'Buy Listing X' button press. Shows confirmation."""
     query = update.callback_query
     user = update.effective_user
+
+    if not query or not user:
+        if query:
+            await query.answer()
+        return
+
+    if not user.username:
+        logger.warning(
+            f"User {user.id} (Name: {user.first_name}) attempted to purchase a listing without a Telegram username.")
+        username_instruction = (
+            "⚠️ برای خرید غذا، شما باید یک نام کاربری \\(Username\\) در تنظیمات تلگرام خود تنظیم کرده باشید\\. "
+            "این نام کاربری برای نمایش به فروشنده در صورت نیاز استفاده می‌شود\\.\n\n"
+            "لطفا ابتدا یک نام کاربری برای حساب تلگرام خود تنظیم کنید و سپس دوباره برای خرید تلاش نمایید\\."
+        )
+        # Answer the callback query first, then edit the message
+        await query.answer(
+            text="نیاز به تنظیم نام کاربری تلگرام.",
+            show_alert=True  # Make it more prominent
+        )
+        # Try to edit the message the button was on, or send a new one if edit fails
+        try:
+            await query.edit_message_text(
+                escape_markdown_v2(username_instruction),
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=None  # Remove buttons from previous list
+            )
+        except Exception as e_edit:
+            logger.error(f"Error editing message for username requirement (buy): {e_edit}")
+            # Fallback to sending a new message if edit fails (e.g., message too old)
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=escape_markdown_v2(username_instruction),
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        return  # Stop further processing
+
     await query.answer()
 
     callback_data = query.data
@@ -298,7 +334,7 @@ async def handle_purchase_button(update: Update, context: ContextTypes.DEFAULT_T
             if meal.date:
                 try:
                     # meal_date_str_raw = meal.date.strftime('%Y-%m-%d')
-                    meal_date_str_raw = utility.format_gregorian_date_to_shamsi(meal.date)
+                    meal_date_str_raw = format_gregorian_date_to_shamsi(meal.date)
                 except AttributeError:
                     meal_date_str_raw = str(meal.date)
 
@@ -429,27 +465,27 @@ async def handle_confirm_purchase(update: Update, context: ContextTypes.DEFAULT_
         part1 = f"درخواست خرید شما برای آگهی "
         part2_listing_id = f"`{listing_id}`"
         part3_meal_intro = f" ("
-        part4_meal_desc = utility.escape_markdown_v2(raw_meal_description)
+        part4_meal_desc = escape_markdown_v2(raw_meal_description)
         part5_meal_outro_and_status = f") ثبت شد.\n"
         part6_payment_instruction1 = f"⏳ لطفا مبلغ "
-        part7_price = f"*{utility.escape_markdown_v2(price_str)} تومان*"
+        part7_price = f"*{escape_markdown_v2(price_str)} تومان*"
         part8_payment_instruction2 = f" را به فروشنده واریز نمایید:\n\n"  # Changed "شماره کارت زیر" to "فروشنده"
 
         # Seller contact information part
-        seller_contact_info_parts = [utility.escape_markdown_v2("👤 فروشنده: ")]
+        seller_contact_info_parts = [escape_markdown_v2("👤 فروشنده: ")]
         if seller_username:
-            seller_contact_info_parts.append(f"@{utility.escape_markdown_v2(seller_username)}")
-            seller_contact_info_parts.append(utility.escape_markdown_v2(f" (ID: "))
+            seller_contact_info_parts.append(f"@{escape_markdown_v2(seller_username)}")
+            seller_contact_info_parts.append(escape_markdown_v2(f" (ID: "))
             seller_contact_info_parts.append(f"`{seller_telegram_id}`")
-            seller_contact_info_parts.append(utility.escape_markdown_v2(")\n"))
+            seller_contact_info_parts.append(escape_markdown_v2(")\n"))
         else:
-            seller_contact_info_parts.append(utility.escape_markdown_v2(f"ID: "))
+            seller_contact_info_parts.append(escape_markdown_v2(f"ID: "))
             seller_contact_info_parts.append(f"`{seller_telegram_id}`")
-            seller_contact_info_parts.append(utility.escape_markdown_v2("\n"))
+            seller_contact_info_parts.append(escape_markdown_v2("\n"))
         part_seller_contact_line = "".join(seller_contact_info_parts)
 
         part9_card_intro = f"💳 شماره کارت: "  # Added "شماره کارت: "
-        part10_card_number = f"`{utility.escape_markdown_v2(seller_card_number)}`"
+        part10_card_number = f"`{escape_markdown_v2(seller_card_number)}`"
         part11_card_outro = f"\n\n"
         part12_seller_confirmation_notice = f"پس از واریز، *ابتدا دکمه «وجه را واریز کردم» را بزنید* تا به فروشنده اطلاع داده شود، سپس منتظر تایید فروشنده برای دریافت کد بمانید.\n"
         part13_warning_intro = f"🚨 "
@@ -457,22 +493,22 @@ async def handle_confirm_purchase(update: Update, context: ContextTypes.DEFAULT_
         part15_cancellation_option = f"در صورت انصراف از خرید (قبل از واریز یا تایید فروشنده)، دکمه لغو را بزنید:"
 
         buyer_message = (
-            f"{utility.escape_markdown_v2(part1)}"
+            f"{escape_markdown_v2(part1)}"
             f"{part2_listing_id}"
-            f"{utility.escape_markdown_v2(part3_meal_intro)}"
+            f"{escape_markdown_v2(part3_meal_intro)}"
             f"{part4_meal_desc}"
-            f"{utility.escape_markdown_v2(part5_meal_outro_and_status)}"
-            f"{utility.escape_markdown_v2(part6_payment_instruction1)}"
+            f"{escape_markdown_v2(part5_meal_outro_and_status)}"
+            f"{escape_markdown_v2(part6_payment_instruction1)}"
             f"{part7_price}"
-            f"{utility.escape_markdown_v2(part8_payment_instruction2)}"
+            f"{escape_markdown_v2(part8_payment_instruction2)}"
             f"{part_seller_contact_line}"  # <-- ADDED SELLER CONTACT LINE
-            f"{utility.escape_markdown_v2(part9_card_intro)}"
+            f"{escape_markdown_v2(part9_card_intro)}"
             f"{part10_card_number}"
-            f"{utility.escape_markdown_v2(part11_card_outro)}"
-            f"{utility.escape_markdown_v2(part12_seller_confirmation_notice)}"
-            f"{utility.escape_markdown_v2(part13_warning_intro)}"
-            f"*{utility.escape_markdown_v2('هشدار:')}* {utility.escape_markdown_v2(' ربات مسئولیتی در قبال تراکنش ندارد.')}\n\n"
-            f"{utility.escape_markdown_v2(part15_cancellation_option)}"
+            f"{escape_markdown_v2(part11_card_outro)}"
+            f"{escape_markdown_v2(part12_seller_confirmation_notice)}"
+            f"{escape_markdown_v2(part13_warning_intro)}"
+            f"*{escape_markdown_v2('هشدار:')}* {escape_markdown_v2(' ربات مسئولیتی در قبال تراکنش ندارد.')}\n\n"
+            f"{escape_markdown_v2(part15_cancellation_option)}"
         )
 
         buyer_payment_sent_button = InlineKeyboardButton(
@@ -498,9 +534,9 @@ async def handle_confirm_purchase(update: Update, context: ContextTypes.DEFAULT_
         # Notify Seller
         try:
             # Escape buyer name for V2
-            buyer_name_escaped = utility.escape_markdown_v2(f"@{user.username}" or user.first_name)
+            buyer_name_escaped = escape_markdown_v2(f"@{user.username}" or user.first_name)
             # Escape price string just in case it contains '.' or other chars (though unlikely for price_str)
-            price_str_escaped = utility.escape_markdown_v2(price_str)
+            price_str_escaped = escape_markdown_v2(price_str)
 
             seller_confirm_button = InlineKeyboardButton(
                 "✅ تایید دریافت وجه",
@@ -515,7 +551,7 @@ async def handle_confirm_purchase(update: Update, context: ContextTypes.DEFAULT_
             seller_message = (
                 f"🔔 درخواست خرید جدید برای آگهی شما\\!\n\n"
                 # Escape the parentheses around meal_desc_escaped -> \\( ... \\)
-                f"آگهی: `{listing_id}` \\({utility.escape_markdown_v2(raw_meal_description)}\\)\n"
+                f"آگهی: `{listing_id}` \\({escape_markdown_v2(raw_meal_description)}\\)\n"
                 f"خریدار: {buyer_name_escaped} \\(ID: `{user.id}`\\)\n"
                 f"مبلغ: {price_str_escaped} تومان\n\n"
                 f"خریدار اطلاعات کارت شما را دریافت کرد\\. لطفا *پس از دریافت وجه*، دکمه 'تایید دریافت وجه' را بزنید\\.\n"
@@ -657,9 +693,9 @@ async def handle_buyer_payment_sent(update: Update, context: ContextTypes.DEFAUL
         return
 
     # Prepare dynamic parts (escape them individually)
-    buyer_display_name_escaped = utility.escape_markdown_v2(
+    buyer_display_name_escaped = escape_markdown_v2(
         f"@{user.username}" or user.first_name or f"ID: {user.id}")
-    listing_meal_desc_escaped = utility.escape_markdown_v2(listing_meal_desc_raw)
+    listing_meal_desc_escaped = escape_markdown_v2(listing_meal_desc_raw)
 
     # Construct seller notification text carefully for MarkdownV2
     seller_notification_text = (
@@ -671,13 +707,13 @@ async def handle_buyer_payment_sent(update: Update, context: ContextTypes.DEFAUL
     # Construct buyer's updated message texts
     # These are the pieces that will be joined. Dynamic parts are already escaped.
     # Static parts that need escaping are escaped here directly.
-    buyer_msg_part1 = utility.escape_markdown_v2(f"شما اعلام کردید که وجه را برای آگهی ")
+    buyer_msg_part1 = escape_markdown_v2(f"شما اعلام کردید که وجه را برای آگهی ")
     buyer_msg_part2_listing_info = f"{listing_id_md} \\({listing_meal_desc_escaped}\\) "  # Note escaped parens
-    buyer_msg_part3 = utility.escape_markdown_v2(f"واریز کرده‌اید.\n\n")
-    buyer_msg_part4 = utility.escape_markdown_v2("لطفا منتظر تایید فروشنده بمانید.\n")
-    buyer_msg_part5 = utility.escape_markdown_v2(
+    buyer_msg_part3 = escape_markdown_v2(f"واریز کرده‌اید.\n\n")
+    buyer_msg_part4 = escape_markdown_v2("لطفا منتظر تایید فروشنده بمانید.\n")
+    buyer_msg_part5 = escape_markdown_v2(
         "در صورت عدم تایید توسط فروشنده پس از مدت معقول، می‌توانید با ایشان یا پشتیبانی تماس بگیرید.\n\n")
-    buyer_msg_part6 = utility.escape_markdown_v2(
+    buyer_msg_part6 = escape_markdown_v2(
         "همچنان می‌توانید درخواست خرید خود را از طریق دکمه زیر لغو کنید (تا پیش از تایید نهایی فروشنده):")
 
     common_buyer_message_suffix = (
@@ -685,11 +721,11 @@ async def handle_buyer_payment_sent(update: Update, context: ContextTypes.DEFAUL
         f"{buyer_msg_part4}{buyer_msg_part5}{buyer_msg_part6}"
     )
 
-    buyer_message_on_seller_notify_success = utility.escape_markdown_v2(
+    buyer_message_on_seller_notify_success = escape_markdown_v2(
         "✅ به فروشنده اطلاع داده شد.\n") + common_buyer_message_suffix
 
     buyer_message_on_seller_notify_fail = (
-            utility.escape_markdown_v2(
+            escape_markdown_v2(
                 "اقدام شما مبنی بر پرداخت وجه در سیستم ثبت شد.\n"
                 "⚠️ اما مشکلی در اطلاع‌رسانی مستقیم به فروشنده پیش آمد. "
                 "لطفا خودتان نیز به ایشان اطلاع دهید یا منتظر بمانید.\n\n"
@@ -726,7 +762,7 @@ async def handle_buyer_payment_sent(update: Update, context: ContextTypes.DEFAUL
             f"Unexpected error during seller notification or buyer message update for listing {listing_id}: {e_unexpected}",
             exc_info=True)
 
-        fallback_buyer_text = utility.escape_markdown_v2(
+        fallback_buyer_text = escape_markdown_v2(
             "خطای ناشناخته‌ای هنگام اطلاع‌رسانی به فروشنده رخ داد. "
             "اقدام شما ثبت شده است. لطفا با فروشنده نیز تماس بگیرید."
         )
@@ -952,9 +988,9 @@ async def handle_seller_confirmation(update: Update, context: ContextTypes.DEFAU
         text_part_seller_3 = f" تایید شد.\nکد و بارکد برای خریدار ارسال می‌شود."
 
         escaped_success_edit_text = (
-            f"{utility.escape_markdown_v2(text_part_seller_1)}"
+            f"{escape_markdown_v2(text_part_seller_1)}"
             f"{text_part_seller_2_id}"  # listing_id is an int, safe in backticks
-            f"{utility.escape_markdown_v2(text_part_seller_3)}"  # This will escape the periods
+            f"{escape_markdown_v2(text_part_seller_3)}"  # This will escape the periods
         )
 
         logger.info(
@@ -969,7 +1005,7 @@ async def handle_seller_confirmation(update: Update, context: ContextTypes.DEFAU
             logger.error(f"SELLER MSG EDIT (SUCCESS): FAILED to edit seller's message: {e_edit_seller_success}",
                          exc_info=True)
 
-        barcode_image_bytes = utility.generate_qr_code_image(data=reservation_code)
+        barcode_image_bytes = generate_qr_code_image(data=reservation_code)
 
         # Construct the caption, escaping static parts
         # Part 1
@@ -980,16 +1016,16 @@ async def handle_seller_confirmation(update: Update, context: ContextTypes.DEFAU
         text_part3 = f" تایید شد!\n\nکد رزرو شما: "
         # Part 4 (dynamic reservation_code, ensure it's escaped if it can contain special chars)
         # The backticks around it are Markdown syntax.
-        text_part4_code = f"`{utility.escape_markdown_v2(str(reservation_code))}`"
+        text_part4_code = f"`{escape_markdown_v2(str(reservation_code))}`"
         # Part 5
         text_part5 = f"\n\nمی‌توانید از بارکد بالا یا کد برای دریافت غذا استفاده کنید."
 
         buyer_message_caption = (
-            f"{utility.escape_markdown_v2(text_part1)}"
+            f"{escape_markdown_v2(text_part1)}"
             f"{text_part2_listing_id}"  # listing_id is int, safe in backticks
-            f"{utility.escape_markdown_v2(text_part3)}"
+            f"{escape_markdown_v2(text_part3)}"
             f"{text_part4_code}"  # Code is already escaped and in backticks
-            f"{utility.escape_markdown_v2(text_part5)}"
+            f"{escape_markdown_v2(text_part5)}"
         )
 
         try:
@@ -1021,7 +1057,7 @@ async def handle_seller_confirmation(update: Update, context: ContextTypes.DEFAU
                                            f"پرداخت تایید شد، اما در ارسال کد به خریدار آگهی {listing_id} مشکلی پیش آمد. لطفا کد `{reservation_code}` را دستی برای او ارسال کنید.")
 
     else:  # finalization failed or data missing
-        error_edit_text = utility.escape_markdown_v2(error_message)
+        error_edit_text = escape_markdown_v2(error_message)
         logger.info(
             f"SELLER MSG EDIT (FAILURE): Attempting to edit seller's message to: {error_edit_text}")  # YOUR ADDED LOG
         try:
