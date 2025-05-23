@@ -161,12 +161,18 @@ async def receive_phone_number(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if not contact:
         logger.warning(f"User {user.id} sent non-contact message in ASK_PHONE state.")
-        await message.reply_text("لطفا از دکمه 'ارسال شماره تلفن من' استفاده کنید یا /cancel را بزنید.")
+        await message.reply_text(
+            "لطفا از دکمه 'ارسال شماره تلفن من' استفاده کنید یا /cancel را بزنید.",
+            parse_mode=None
+        )
         return ASK_PHONE
 
     if contact.user_id != user.id:
         logger.warning(f"User {user.id} shared contact belonging to user {contact.user_id}.")
-        await message.reply_text("خطا: شماره تلفن ارسال شده متعلق به شما نیست. لطفا دوباره تلاش کنید یا /cancel بزنید.")
+        await message.reply_text(
+            "خطا: شماره تلفن ارسال شده متعلق به شما نیست. لطفا دوباره تلاش کنید یا /cancel بزنید.",
+            parse_mode=None
+        )
         phone_button = KeyboardButton("ارسال شماره تلفن من", request_contact=True)
         cancel_button = KeyboardButton("/cancel")
         reply_markup = ReplyKeyboardMarkup([[phone_button], [cancel_button]], resize_keyboard=True, one_time_keyboard=True)
@@ -185,7 +191,8 @@ async def receive_phone_number(update: Update, context: ContextTypes.DEFAULT_TYP
         if not phone_num_normalized.startswith("98"): # Assuming Iranian numbers
             logger.warning(f"User {user.id} shared non-Iranian phone number: {phone_num_raw}")
             await message.reply_text(
-                "خطا: به نظر می‌رسد شماره تلفن ارسال شده متعلق به ایران نیست. لطفا شماره تلفن معتبر ایرانی خود را ارسال کنید یا /cancel بزنید."
+                "خطا: به نظر می‌رسد شماره تلفن ارسال شده متعلق به ایران نیست. لطفا شماره تلفن معتبر ایرانی خود را ارسال کنید یا /cancel بزنید.",
+                parse_mode=None
             )
             phone_button = KeyboardButton("ارسال شماره تلفن من", request_contact=True)
             cancel_button = KeyboardButton("/cancel")
@@ -216,7 +223,8 @@ async def receive_phone_number(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.info(f"User {user.id} successfully verified (phone only) and details updated.")
             await message.reply_text(
                 "✅ اعتبارسنجی شما (بر اساس شماره تلفن) با موفقیت انجام شد! از الان می‌توانید از امکانات ربات استفاده کنید.",
-                reply_markup=get_main_menu_keyboard()
+                reply_markup=get_main_menu_keyboard(),
+                parse_mode = None
             )
             context.user_data.clear()
             return ConversationHandler.END
