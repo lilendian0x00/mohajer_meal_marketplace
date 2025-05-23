@@ -39,13 +39,13 @@ async def handle_sell_food(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if not user.username:
         logger.warning(f"User {user.id} (Name: {user.first_name}) attempted to sell food without a Telegram username.")
-        username_instruction = (
-            "⚠️ برای فروش غذا، شما باید یک نام کاربری \\(Username\\) در تنظیمات تلگرام خود تنظیم کرده باشید\\. "
-            "این نام کاربری برای نمایش به خریداران احتمالی استفاده می‌شود\\.\n\n"
-            "لطفا ابتدا یک نام کاربری برای حساب تلگرام خود تنظیم کنید و سپس دوباره تلاش نمایید\\."
+        username_instruction_plain = (
+            "⚠️ برای فروش غذا، شما باید یک نام کاربری (Username) در تنظیمات تلگرام خود تنظیم کرده باشید. "
+            "این نام کاربری برای نمایش به خریداران احتمالی استفاده می‌شود.\n\n"
+            "لطفا ابتدا یک نام کاربری برای حساب تلگرام خود تنظیم کنید و سپس دوباره تلاش نمایید."
         )
         await message.reply_text(
-            escape_markdown_v2(username_instruction),
+            escape_markdown_v2(username_instruction_plain),
             parse_mode=ParseMode.MARKDOWN_V2,
             reply_markup=get_main_menu_keyboard()
         )

@@ -255,10 +255,10 @@ async def handle_purchase_button(update: Update, context: ContextTypes.DEFAULT_T
     if not user.username:
         logger.warning(
             f"User {user.id} (Name: {user.first_name}) attempted to purchase a listing without a Telegram username.")
-        username_instruction = (
-            "⚠️ برای خرید غذا، شما باید یک نام کاربری \\(Username\\) در تنظیمات تلگرام خود تنظیم کرده باشید\\. "
-            "این نام کاربری برای نمایش به فروشنده در صورت نیاز استفاده می‌شود\\.\n\n"
-            "لطفا ابتدا یک نام کاربری برای حساب تلگرام خود تنظیم کنید و سپس دوباره برای خرید تلاش نمایید\\."
+        username_instruction_plain = (
+            "⚠️ برای خرید غذا، شما باید یک نام کاربری (Username) در تنظیمات تلگرام خود تنظیم کرده باشید. "
+            "این نام کاربری برای نمایش به فروشنده در صورت نیاز استفاده می‌شود.\n\n"
+            "لطفا ابتدا یک نام کاربری برای حساب تلگرام خود تنظیم کنید و سپس دوباره برای خرید تلاش نمایید."
         )
         # Answer the callback query first, then edit the message
         await query.answer(
@@ -268,16 +268,15 @@ async def handle_purchase_button(update: Update, context: ContextTypes.DEFAULT_T
         # Try to edit the message the button was on, or send a new one if edit fails
         try:
             await query.edit_message_text(
-                escape_markdown_v2(username_instruction),
+                escape_markdown_v2(username_instruction_plain),
                 parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=None  # Remove buttons from previous list
+                reply_markup=None
             )
         except Exception as e_edit:
             logger.error(f"Error editing message for username requirement (buy): {e_edit}")
-            # Fallback to sending a new message if edit fails (e.g., message too old)
             await context.bot.send_message(
                 chat_id=user.id,
-                text=escape_markdown_v2(username_instruction),
+                text=escape_markdown_v2(username_instruction_plain),
                 parse_mode=ParseMode.MARKDOWN_V2
             )
         return  # Stop further processing
