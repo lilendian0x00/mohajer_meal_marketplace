@@ -28,7 +28,7 @@ def setup_logging():
                 "asctime": "time",
                 "name": "logger_name"
             },
-            datefmt="%Y-%m-%dT%H:%M:%S.%3fZ"
+            datefmt="%Y-%m-%dT%H:%M:%S.%fZ"
         )
         log_handler.setFormatter(formatter)
         # Initial log message (will also be JSON)

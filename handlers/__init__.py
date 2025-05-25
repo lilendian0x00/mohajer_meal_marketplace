@@ -81,4 +81,4 @@ __all__ = [
     'echo', 'unexpected_message_handler',
 ]
 
-print("Handlers package initialized and modules imported.")
+logging.getLogger("handlers_init").info("Handlers package initialized...")

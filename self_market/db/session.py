@@ -132,24 +132,30 @@ async def seed_database(session: AsyncSession):
     else:
         logger.info("No new seed meals needed.")
 
+
 async def init_db():
-    """Initializes the database by creating tables based on Base metadata."""
+    """
+    Initializes database aspects like seeding.
+    Schema creation and migration are handled by Alembic.
+    """
+    logger.info(f"Database initialization routine started for: {DATABASE_URL}")
+
+    # Log known tables by SQLAlchemy (good for debugging model registration)
     registered_tables = list(Base.metadata.tables.keys())
-    logger.info(f"SQLAlchemy Base.metadata knows about tables: {registered_tables}")
-
+    logger.info(f"SQLAlchemy Base.metadata currently knows about tables: {registered_tables}")
     if not registered_tables:
-        logger.error("CRITICAL: No tables found in Base.metadata! Check model definitions and imports in models.py and session.py.")
-        raise RuntimeError("No models registered with SQLAlchemy Base, cannot initialize database.")
+        logger.warning("Warning: No tables found in Base.metadata when init_db called. "
+                       "Ensure models are imported before Base is used by Alembic or other parts of the app.")
 
-    logger.info(f"Attempting to create tables in database: {DATABASE_URL}")
+
+    logger.info("Schema management is handled by Alembic. Skipping Base.metadata.create_all().")
+    logger.info("Ensure 'alembic upgrade head' has been run to set up the database schema.")
+
+    # Proceed with seeding data if necessary
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("SQLAlchemy Base.metadata.create_all execution completed.")
-
-        # Seed the database
-        async with async_session_factory() as session:
+        async with async_session_factory() as session:  # Use your defined session factory
             await seed_database(session)
+        logger.info("Database seeding process completed (if any seeds were pending).")
     except Exception as e:
-        logger.error(f"EXCEPTION during database initialization (init_db): {e}", exc_info=True)
+        logger.error(f"EXCEPTION during database seeding in init_db: {e}", exc_info=True)
         raise
